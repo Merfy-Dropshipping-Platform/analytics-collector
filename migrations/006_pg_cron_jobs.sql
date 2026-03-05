@@ -1,0 +1,21 @@
+-- Migration 006: Materialized view refresh schedules
+-- NOTE: pg_cron not available on postgres:17-alpine.
+-- Matview refresh and partition management handled by Go service
+-- (internal/db/maintenance.go):
+--   - Matview refresh: every 5 minutes
+--   - Partition creation: daily (3 months ahead)
+--   - Partition retention: 30 days auto-drop
+--
+-- If pg_cron becomes available, uncomment:
+-- SELECT cron.schedule('refresh_daily_traffic', '*/5 * * * *',
+--     $$REFRESH MATERIALIZED VIEW CONCURRENTLY silver.daily_traffic$$);
+-- SELECT cron.schedule('refresh_daily_orders', '*/5 * * * *',
+--     $$REFRESH MATERIALIZED VIEW CONCURRENTLY silver.daily_orders$$);
+-- SELECT cron.schedule('refresh_daily_funnel', '*/5 * * * *',
+--     $$REFRESH MATERIALIZED VIEW CONCURRENTLY silver.daily_funnel$$);
+-- SELECT cron.schedule('refresh_daily_channels', '*/5 * * * *',
+--     $$REFRESH MATERIALIZED VIEW CONCURRENTLY silver.daily_channel_attribution$$);
+-- SELECT cron.schedule('refresh_dashboard_kpi', '1-59/5 * * * *',
+--     $$REFRESH MATERIALIZED VIEW CONCURRENTLY gold.dashboard_kpi$$);
+-- SELECT cron.schedule('refresh_top_products', '*/15 * * * *',
+--     $$REFRESH MATERIALIZED VIEW CONCURRENTLY gold.top_products$$);
