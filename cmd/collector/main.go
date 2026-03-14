@@ -107,11 +107,13 @@ func main() {
 
 	collectHandler := handler.NewCollectHandler(pub)
 	healthHandler := handler.NewHealthHandler()
+	pixelsHTTPHandler := handler.NewPixelsHTTPHandler(pool)
 
 	r.Post("/collect", collectHandler.ServeHTTP)
 	r.Get("/health", healthHandler.ServeHTTP)
+	r.Get("/pixels", pixelsHTTPHandler.ServeHTTP)
 
-	// Static files (tracker.js, loader.js) - will be added in US2/US3
+	// Static files (tracker.js, loader.js)
 	r.Get("/tracker.js", handler.ServeStatic("/static/tracker.js", "application/javascript", 3600))
 	r.Get("/loader.js", handler.ServeStatic("/static/loader.js", "application/javascript", 300))
 

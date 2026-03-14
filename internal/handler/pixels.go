@@ -4,10 +4,86 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ---- HTTP handler for loader.js (public, no auth) ----
+
+type PixelHTTPResponse struct {
+	PixelType string `json:"pixel_type"`
+	PixelID   string `json:"pixel_id"`
+	Inject    string `json:"inject"`
+}
+
+type PixelsHTTPHandler struct {
+	pool *pgxpool.Pool
+}
+
+func NewPixelsHTTPHandler(pool *pgxpool.Pool) *PixelsHTTPHandler {
+	return &PixelsHTTPHandler{pool: pool}
+}
+
+func (h *PixelsHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	shopID := r.URL.Query().Get("shop_id")
+	if shopID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "shop_id is required"})
+		return
+	}
+
+	rows, err := h.pool.Query(r.Context(), `
+		SELECT pixel_type, pixel_id
+		FROM config.tracking_pixels
+		WHERE shop_id = $1 AND is_active = true
+		ORDER BY created_at
+	`, shopID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	pixels := make([]PixelHTTPResponse, 0)
+	for rows.Next() {
+		var pType, pID string
+		if err := rows.Scan(&pType, &pID); err != nil {
+			continue
+		}
+		inject := generateInjectHTML(pType, pID)
+		if inject != "" {
+			pixels = append(pixels, PixelHTTPResponse{
+				PixelType: pType,
+				PixelID:   pID,
+				Inject:    inject,
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	json.NewEncoder(w).Encode(map[string]any{"pixels": pixels})
+}
+
+func generateInjectHTML(pixelType, pixelID string) string {
+	switch pixelType {
+	case "yandex_metrika":
+		return fmt.Sprintf(`<script>(function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};m[i].l=1*new Date();for(var j=0;j<document.scripts.length;j++){if(document.scripts[j].src===r){return}}k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})(window,document,"script","https://mc.yandex.ru/metrika/tag.js","ym");ym(%s,"init",{clickmap:true,trackLinks:true,accurateTrackBounce:true,webvisor:true});</script><noscript><div><img src="https://mc.yandex.ru/watch/%s" style="position:absolute;left:-9999px" alt=""/></div></noscript>`, pixelID, pixelID)
+	case "vk":
+		return fmt.Sprintf(`<script>!function(){var t=document.createElement("script");t.type="text/javascript",t.async=!0,t.src="https://vk.com/js/api/openapi.js?169",t.onload=function(){VK.Retargeting.Init("%s"),VK.Retargeting.Hit()},document.head.appendChild(t)}();</script><noscript><img src="https://vk.com/rtrg?p=%s" style="position:fixed;left:-999px" alt=""/></noscript>`, pixelID, pixelID)
+	case "meta":
+		return fmt.Sprintf(`<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','%s');fbq('track','PageView');</script><noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=%s&ev=PageView&noscript=1"/></noscript>`, pixelID, pixelID)
+	case "google_analytics":
+		return fmt.Sprintf(`<script async src="https://www.googletagmanager.com/gtag/js?id=%s"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','%s');</script>`, pixelID, pixelID)
+	case "custom":
+		return pixelID // custom pixel_id IS the script code itself
+	default:
+		return ""
+	}
+}
 
 type Pixel struct {
 	ID        string    `json:"id"`
