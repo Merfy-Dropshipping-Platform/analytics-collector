@@ -16,21 +16,23 @@ type CollectRequest struct {
 }
 
 type CollectEvent struct {
-	Type         string `json:"type"`
-	SessionID    string `json:"session_id"`
-	VisitorID    string `json:"visitor_id,omitempty"`
-	PageURL      string `json:"page_url,omitempty"`
-	PageTitle    string `json:"page_title,omitempty"`
-	Referrer     string `json:"referrer,omitempty"`
-	UTMSource    string `json:"utm_source,omitempty"`
-	UTMMedium    string `json:"utm_medium,omitempty"`
-	UTMCampaign  string `json:"utm_campaign,omitempty"`
-	ProductID    string `json:"product_id,omitempty"`
-	ProductName  string `json:"product_name,omitempty"`
-	ProductPrice int64  `json:"product_price,omitempty"`
-	OrderID      string `json:"order_id,omitempty"`
-	OrderTotal   int64  `json:"order_total,omitempty"`
-	Timestamp    string `json:"timestamp"`
+	Type           string  `json:"type"`
+	SessionID      string  `json:"session_id"`
+	VisitorID      string  `json:"visitor_id,omitempty"`
+	PageURL        string  `json:"page_url,omitempty"`
+	PageTitle      string  `json:"page_title,omitempty"`
+	Referrer       string  `json:"referrer,omitempty"`
+	UTMSource      string  `json:"utm_source,omitempty"`
+	UTMMedium      string  `json:"utm_medium,omitempty"`
+	UTMCampaign    string  `json:"utm_campaign,omitempty"`
+	ProductID      string  `json:"product_id,omitempty"`
+	ProductName    string  `json:"product_name,omitempty"`
+	ProductPrice   int64   `json:"product_price,omitempty"`
+	OrderID        string  `json:"order_id,omitempty"`
+	OrderTotal     int64   `json:"order_total,omitempty"`
+	CostPriceCents *int64  `json:"cost_price_cents,omitempty"`
+	CategoryID     *string `json:"category_id,omitempty"`
+	Timestamp      string  `json:"timestamp"`
 }
 
 var validEventTypes = map[string]bool{

@@ -14,23 +14,25 @@ import (
 )
 
 type Event struct {
-	ShopID       string `json:"shop_id"`
-	TenantID     string `json:"tenant_id,omitempty"`
-	Type         string `json:"type"`
-	SessionID    string `json:"session_id"`
-	VisitorID    string `json:"visitor_id,omitempty"`
-	PageURL      string `json:"page_url,omitempty"`
-	PageTitle    string `json:"page_title,omitempty"`
-	Referrer     string `json:"referrer,omitempty"`
-	UTMSource    string `json:"utm_source,omitempty"`
-	UTMMedium    string `json:"utm_medium,omitempty"`
-	UTMCampaign  string `json:"utm_campaign,omitempty"`
-	ProductID    string `json:"product_id,omitempty"`
-	ProductName  string `json:"product_name,omitempty"`
-	ProductPrice int64  `json:"product_price,omitempty"`
-	OrderID      string `json:"order_id,omitempty"`
-	OrderTotal   int64  `json:"order_total,omitempty"`
-	Timestamp    string `json:"timestamp"`
+	ShopID         string  `json:"shop_id"`
+	TenantID       string  `json:"tenant_id,omitempty"`
+	Type           string  `json:"type"`
+	SessionID      string  `json:"session_id"`
+	VisitorID      string  `json:"visitor_id,omitempty"`
+	PageURL        string  `json:"page_url,omitempty"`
+	PageTitle      string  `json:"page_title,omitempty"`
+	Referrer       string  `json:"referrer,omitempty"`
+	UTMSource      string  `json:"utm_source,omitempty"`
+	UTMMedium      string  `json:"utm_medium,omitempty"`
+	UTMCampaign    string  `json:"utm_campaign,omitempty"`
+	ProductID      string  `json:"product_id,omitempty"`
+	ProductName    string  `json:"product_name,omitempty"`
+	ProductPrice   int64   `json:"product_price,omitempty"`
+	OrderID        string  `json:"order_id,omitempty"`
+	OrderTotal     int64   `json:"order_total,omitempty"`
+	CostPriceCents *int64  `json:"cost_price_cents,omitempty"`
+	CategoryID     *string `json:"category_id,omitempty"`
+	Timestamp      string  `json:"timestamp"`
 }
 
 type CollectPayload struct {
@@ -183,19 +185,21 @@ func (bw *BronzeWriter) insertBatch(ctx context.Context, events []Event) error {
 		page_url, page_title, referrer,
 		utm_source, utm_medium, utm_campaign,
 		product_id, product_name, product_price_cents,
-		order_id, order_total_cents, event_timestamp
+		order_id, order_total_cents, event_timestamp,
+		cost_price_cents, category_id
 	) VALUES `)
 
-	args := make([]any, 0, len(events)*17)
+	const colCount = 19
+	args := make([]any, 0, len(events)*colCount)
 	for i, e := range events {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		base := i * 17
-		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+		base := i * colCount
+		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 			base+1, base+2, base+3, base+4, base+5, base+6, base+7,
 			base+8, base+9, base+10, base+11, base+12, base+13, base+14,
-			base+15, base+16, base+17)
+			base+15, base+16, base+17, base+18, base+19)
 
 		ts, _ := time.Parse(time.RFC3339, e.Timestamp)
 		if ts.IsZero() {
@@ -208,6 +212,7 @@ func (bw *BronzeWriter) insertBatch(ctx context.Context, events []Event) error {
 			nilIfEmpty(e.UTMSource), nilIfEmpty(e.UTMMedium), nilIfEmpty(e.UTMCampaign),
 			nilIfEmpty(e.ProductID), nilIfEmpty(e.ProductName), nilIfZero(e.ProductPrice),
 			nilIfEmpty(e.OrderID), nilIfZero(e.OrderTotal), ts,
+			e.CostPriceCents, e.CategoryID,
 		)
 	}
 
