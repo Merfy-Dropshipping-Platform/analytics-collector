@@ -43,6 +43,7 @@ var validEventTypes = map[string]bool{
 	"checkout_start":   true,
 	"purchase":         true,
 	"session_start":    true,
+	"order_cancel":     true,
 }
 
 type CollectHandler struct {
