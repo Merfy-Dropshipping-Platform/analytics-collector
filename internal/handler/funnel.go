@@ -64,7 +64,14 @@ func HandleFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessa
 
 func safeRate(current, previous int64) float64 {
 	if previous == 0 {
+		if current > 0 {
+			return 100.0
+		}
 		return 0
 	}
-	return float64(current) / float64(previous) * 100
+	rate := float64(current) / float64(previous) * 100
+	if rate > 100 {
+		rate = 100
+	}
+	return rate
 }
