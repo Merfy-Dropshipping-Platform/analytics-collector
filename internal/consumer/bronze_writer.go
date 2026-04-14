@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/merfy/analytics-collector/internal/util"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -26,10 +27,12 @@ type Event struct {
 	UTMMedium      string  `json:"utm_medium,omitempty"`
 	UTMCampaign    string  `json:"utm_campaign,omitempty"`
 	ProductID      string  `json:"product_id,omitempty"`
-	ProductName    string  `json:"product_name,omitempty"`
-	ProductPrice   int64   `json:"product_price,omitempty"`
-	OrderID        string  `json:"order_id,omitempty"`
-	OrderTotal     int64   `json:"order_total,omitempty"`
+	ProductName    string      `json:"product_name,omitempty"`
+	ProductPriceRaw interface{} `json:"product_price,omitempty"`
+	ProductPrice   int64       `json:"-"`
+	OrderID        string      `json:"order_id,omitempty"`
+	OrderTotalRaw  interface{} `json:"order_total,omitempty"`
+	OrderTotal     int64       `json:"-"`
 	CostPriceCents *int64  `json:"cost_price_cents,omitempty"`
 	CategoryID     *string `json:"category_id,omitempty"`
 	Timestamp      string  `json:"timestamp"`
@@ -140,6 +143,8 @@ func (bw *BronzeWriter) handleMessage(msg amqp.Delivery) {
 		if e.TenantID == "" {
 			e.TenantID = payload.TenantID
 		}
+		e.ProductPrice = util.ToInt64Price(e.ProductPriceRaw)
+		e.OrderTotal = util.ToInt64Price(e.OrderTotalRaw)
 		bw.buffer = append(bw.buffer, e)
 	}
 	needFlush := len(bw.buffer) >= bw.batchSize

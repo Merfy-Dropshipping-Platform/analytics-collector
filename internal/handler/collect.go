@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/merfy/analytics-collector/internal/rabbitmq"
+	"github.com/merfy/analytics-collector/internal/util"
 )
 
 type CollectRequest struct {
@@ -16,23 +17,25 @@ type CollectRequest struct {
 }
 
 type CollectEvent struct {
-	Type           string  `json:"type"`
-	SessionID      string  `json:"session_id"`
-	VisitorID      string  `json:"visitor_id,omitempty"`
-	PageURL        string  `json:"page_url,omitempty"`
-	PageTitle      string  `json:"page_title,omitempty"`
-	Referrer       string  `json:"referrer,omitempty"`
-	UTMSource      string  `json:"utm_source,omitempty"`
-	UTMMedium      string  `json:"utm_medium,omitempty"`
-	UTMCampaign    string  `json:"utm_campaign,omitempty"`
-	ProductID      string  `json:"product_id,omitempty"`
-	ProductName    string  `json:"product_name,omitempty"`
-	ProductPrice   int64   `json:"product_price,omitempty"`
-	OrderID        string  `json:"order_id,omitempty"`
-	OrderTotal     int64   `json:"order_total,omitempty"`
-	CostPriceCents *int64  `json:"cost_price_cents,omitempty"`
-	CategoryID     *string `json:"category_id,omitempty"`
-	Timestamp      string  `json:"timestamp"`
+	Type           string      `json:"type"`
+	SessionID      string      `json:"session_id"`
+	VisitorID      string      `json:"visitor_id,omitempty"`
+	PageURL        string      `json:"page_url,omitempty"`
+	PageTitle      string      `json:"page_title,omitempty"`
+	Referrer       string      `json:"referrer,omitempty"`
+	UTMSource      string      `json:"utm_source,omitempty"`
+	UTMMedium      string      `json:"utm_medium,omitempty"`
+	UTMCampaign    string      `json:"utm_campaign,omitempty"`
+	ProductID      string      `json:"product_id,omitempty"`
+	ProductName    string      `json:"product_name,omitempty"`
+	ProductPriceRaw interface{} `json:"product_price,omitempty"`
+	ProductPrice   int64       `json:"-"`
+	OrderID        string      `json:"order_id,omitempty"`
+	OrderTotalRaw  interface{} `json:"order_total,omitempty"`
+	OrderTotal     int64       `json:"-"`
+	CostPriceCents *int64      `json:"cost_price_cents,omitempty"`
+	CategoryID     *string     `json:"category_id,omitempty"`
+	Timestamp      string      `json:"timestamp"`
 }
 
 var validEventTypes = map[string]bool{
@@ -75,6 +78,12 @@ func (h *CollectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(req.Events) == 0 || len(req.Events) > 100 {
 		writeError(w, http.StatusBadRequest, "invalid_payload", "events: must have 1-100 elements")
 		return
+	}
+
+	// Normalize flexible price fields to int64
+	for i := range req.Events {
+		req.Events[i].ProductPrice = util.ToInt64Price(req.Events[i].ProductPriceRaw)
+		req.Events[i].OrderTotal = util.ToInt64Price(req.Events[i].OrderTotalRaw)
 	}
 
 	cutoff := time.Now().Add(-24 * time.Hour)

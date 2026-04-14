@@ -116,7 +116,7 @@ func main() {
 	r.Get("/pixels", pixelsHTTPHandler.ServeHTTP)
 
 	// Static files (tracker.js, loader.js)
-	r.Get("/tracker.js", handler.ServeStatic("/static/tracker.js", "application/javascript", 3600))
+	r.Get("/tracker.js", handler.ServeStatic("/static/tracker.js", "application/javascript", 300))
 	r.Get("/loader.js", handler.ServeStatic("/static/loader.js", "application/javascript", 300))
 
 	srv := &http.Server{
