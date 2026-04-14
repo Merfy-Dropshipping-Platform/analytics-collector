@@ -110,16 +110,25 @@
   setInterval(flush, BATCH_INTERVAL);
   window.addEventListener('beforeunload', flush);
 
+  // Parse price text like "15 ₽" or "1 200 ₽" to cents integer
+  function parsePriceCents(val) {
+    if (typeof val === 'number') return Math.round(val * 100);
+    if (typeof val !== 'string') return 0;
+    var cleaned = val.replace(/[^\d.,]/g, '').replace(',', '.');
+    var num = parseFloat(cleaned);
+    return isNaN(num) ? 0 : Math.round(num * 100);
+  }
+
   // Public API for e-commerce events
   window._mfy = {
     track: function(type, data) {
       pushEvent(type, data);
     },
     trackProductView: function(productId, name, price) {
-      pushEvent('product_view', { product_id: productId, product_name: name, product_price: price });
+      pushEvent('product_view', { product_id: productId, product_name: name, product_price: parsePriceCents(price) });
     },
     trackAddToCart: function(productId, name, price) {
-      pushEvent('add_to_cart', { product_id: productId, product_name: name, product_price: price });
+      pushEvent('add_to_cart', { product_id: productId, product_name: name, product_price: parsePriceCents(price) });
     },
     trackCheckout: function() {
       pushEvent('checkout_start');
