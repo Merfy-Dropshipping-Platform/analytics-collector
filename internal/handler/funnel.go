@@ -66,5 +66,9 @@ func safeRate(current, total int64) float64 {
 	if total == 0 {
 		return 0
 	}
-	return float64(current) / float64(total) * 100
+	rate := float64(current) / float64(total) * 100
+	if rate > 100 {
+		return 100
+	}
+	return rate
 }
