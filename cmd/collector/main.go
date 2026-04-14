@@ -79,6 +79,7 @@ func main() {
 	rpcSrv.Register("analytics.funnel", handler.HandleFunnel)
 	rpcSrv.Register("analytics.channels", handler.HandleChannels)
 	rpcSrv.Register("analytics.top_products", handler.HandleTopProducts)
+	rpcSrv.Register("analytics.returning_customers", handler.HandleReturningCustomers)
 	rpcSrv.Register("analytics.pixels.list", handler.HandlePixelsList)
 	rpcSrv.Register("analytics.pixels.create", handler.HandlePixelsCreate)
 	rpcSrv.Register("analytics.pixels.update", handler.HandlePixelsUpdate)
