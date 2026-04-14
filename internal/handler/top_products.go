@@ -18,8 +18,8 @@ type TopProductsRequest struct {
 
 type ProductEntry struct {
 	ProductID        string `json:"product_id"`
-	Name             string `json:"name"`
-	SalesCount       int64  `json:"sales_count"`
+	Name             string `json:"product_name"`
+	SalesCount       int64  `json:"total_sold"`
 	TotalRevenueCents int64 `json:"total_revenue_cents"`
 }
 

@@ -26,11 +26,11 @@ type DashboardKPI struct {
 }
 
 type DashboardTimeSeries struct {
-	Day          string `json:"day"`
-	RevenueCents int64  `json:"revenue_cents"`
-	Orders       int64  `json:"orders"`
-	Visitors     int64  `json:"visitors"`
-	Sessions     int64  `json:"sessions"`
+	Day          string `json:"date"`
+	RevenueCents int64  `json:"total_revenue_cents"`
+	Orders       int64  `json:"total_orders"`
+	Visitors     int64  `json:"unique_visitors"`
+	Sessions     int64  `json:"unique_sessions"`
 	PageViews    int64  `json:"page_views"`
 }
 
