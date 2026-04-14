@@ -91,7 +91,7 @@
     var payload = JSON.stringify({ shop_id: shopId, events: batch });
 
     if (navigator.sendBeacon) {
-      navigator.sendBeacon(BEACON_URL, new Blob([payload], { type: 'application/json' }));
+      navigator.sendBeacon(BEACON_URL, new Blob([payload], { type: 'text/plain' }));
     } else {
       var xhr = new XMLHttpRequest();
       xhr.open('POST', BEACON_URL, true);
