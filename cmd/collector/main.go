@@ -98,10 +98,12 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   cfg.CORSOrigins,
+		AllowOriginFunc: func(r *http.Request, origin string) bool {
+			return true // accept all origins — tracker is a public beacon endpoint
+		},
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type"},
-		AllowCredentials: false,
+		AllowCredentials: true,
 		MaxAge:           3600,
 	}))
 
