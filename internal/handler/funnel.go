@@ -36,27 +36,38 @@ func HandleFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessa
 
 	start, end := periodRange(req.Period, timeNow())
 
-	var visits, productViews, addToCart, checkoutStarts, purchases int64
+	// Total visits = all unique sessions (same as "Посещаемость" on dashboard)
+	var totalSessions int64
 	err := pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(unique_sessions), 0)
+		FROM silver.daily_traffic
+		WHERE shop_id = $1 AND day >= $2 AND day < $3
+	`, req.ShopID, start, end).Scan(&totalSessions)
+	if err != nil {
+		return nil, err
+	}
+
+	// Funnel stages from daily_funnel
+	var productViews, addToCart, checkoutStarts, purchases int64
+	err = pool.QueryRow(ctx, `
 		SELECT
-			COALESCE(SUM(visits), 0),
 			COALESCE(SUM(product_views), 0),
 			COALESCE(SUM(add_to_cart), 0),
 			COALESCE(SUM(checkout_starts), 0),
 			COALESCE(SUM(purchases), 0)
 		FROM silver.daily_funnel
 		WHERE shop_id = $1 AND day >= $2 AND day < $3
-	`, req.ShopID, start, end).Scan(&visits, &productViews, &addToCart, &checkoutStarts, &purchases)
+	`, req.ShopID, start, end).Scan(&productViews, &addToCart, &checkoutStarts, &purchases)
 	if err != nil {
 		return nil, err
 	}
 
 	stages := []FunnelStage{
-		{Name: "visits", Label: "Визиты", Count: visits, Rate: 100.0},
-		{Name: "product_views", Label: "Просмотр товара", Count: productViews, Rate: safeRate(productViews, visits)},
-		{Name: "add_to_cart", Label: "Корзина", Count: addToCart, Rate: safeRate(addToCart, visits)},
-		{Name: "checkout_starts", Label: "Оформление", Count: checkoutStarts, Rate: safeRate(checkoutStarts, visits)},
-		{Name: "purchases", Label: "Покупка", Count: purchases, Rate: safeRate(purchases, visits)},
+		{Name: "visits", Label: "Визиты", Count: totalSessions, Rate: 100.0},
+		{Name: "product_views", Label: "Просмотр товара", Count: productViews, Rate: safeRate(productViews, totalSessions)},
+		{Name: "add_to_cart", Label: "Корзина", Count: addToCart, Rate: safeRate(addToCart, totalSessions)},
+		{Name: "checkout_starts", Label: "Оформление", Count: checkoutStarts, Rate: safeRate(checkoutStarts, totalSessions)},
+		{Name: "purchases", Label: "Покупка", Count: purchases, Rate: safeRate(purchases, totalSessions)},
 	}
 
 	return FunnelResponse{Stages: stages}, nil
