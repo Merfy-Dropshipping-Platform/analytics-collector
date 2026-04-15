@@ -68,7 +68,7 @@ func HandleTraffic(ctx context.Context, pool *pgxpool.Pool, payload json.RawMess
 			COALESCE(SUM(unique_sessions), 0),
 			COALESCE(SUM(page_views), 0)
 		FROM silver.daily_traffic
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 	`, req.ShopID, start, end).Scan(&summary.TotalVisitors, &summary.TotalSessions, &summary.TotalPageViews)
 	if err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func HandleTraffic(ctx context.Context, pool *pgxpool.Pool, payload json.RawMess
 	rows, err := pool.Query(ctx, `
 		SELECT day::text, unique_visitors, unique_sessions, page_views
 		FROM silver.daily_traffic
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 		ORDER BY day
 	`, req.ShopID, start, end)
 	if err != nil {

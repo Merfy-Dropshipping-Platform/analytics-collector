@@ -43,7 +43,7 @@ func HandleFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessa
 	err := pool.QueryRow(ctx, `
 		SELECT COALESCE(SUM(unique_sessions), 0)
 		FROM silver.daily_traffic
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 	`, req.ShopID, start, end).Scan(&totalSessions)
 	if err != nil {
 		return nil, err
@@ -58,7 +58,7 @@ func HandleFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessa
 			COALESCE(SUM(checkout_starts), 0),
 			COALESCE(SUM(purchases), 0)
 		FROM silver.daily_funnel
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 	`, req.ShopID, start, end).Scan(&productViews, &addToCart, &checkoutStarts, &purchases)
 	if err != nil {
 		return nil, err

@@ -53,7 +53,7 @@ func HandleChannels(ctx context.Context, pool *pgxpool.Pool, payload json.RawMes
 			COALESCE(SUM(orders), 0),
 			COALESCE(SUM(revenue_cents), 0)
 		FROM silver.daily_channel_attribution
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 		GROUP BY channel
 		ORDER BY SUM(sessions) DESC
 	`, req.ShopID, start, end)
@@ -81,7 +81,7 @@ func HandleChannels(ctx context.Context, pool *pgxpool.Pool, payload json.RawMes
 			COALESCE(SUM(orders), 0),
 			COALESCE(SUM(revenue_cents), 0)
 		FROM silver.daily_channel_attribution
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 		GROUP BY day, channel
 		ORDER BY day, SUM(sessions) DESC
 	`, req.ShopID, start, end)

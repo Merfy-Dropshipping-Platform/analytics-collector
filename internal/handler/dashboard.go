@@ -100,7 +100,7 @@ func queryKPI(ctx context.Context, pool *pgxpool.Pool, shopID string, start, end
 					/ SUM(unique_sessions) * 100, 2), 100)
 				ELSE 0 END
 		FROM gold.dashboard_kpi
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 	`, shopID, start, end).Scan(
 		&kpi.TotalRevenueCents, &kpi.TotalOrders, &kpi.AvgOrderCents,
 		&kpi.UniqueVisitors, &kpi.UniqueSessions, &kpi.PageViews,
@@ -119,7 +119,7 @@ func queryTimeSeries(ctx context.Context, pool *pgxpool.Pool, shopID string, sta
 			COALESCE(unique_sessions, 0),
 			COALESCE(page_views, 0)
 		FROM gold.dashboard_kpi
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 		ORDER BY day
 	`, shopID, start, end)
 	if err != nil {

@@ -57,7 +57,7 @@ func HandleRevenue(ctx context.Context, pool *pgxpool.Pool, payload json.RawMess
 				THEN (SUM(total_revenue_cents) / SUM(order_count))::bigint
 				ELSE 0 END
 		FROM silver.daily_orders
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 	`, req.ShopID, start, end).Scan(
 		&summary.TotalRevenueCents, &summary.TotalOrders, &summary.AvgOrderCents,
 	)
@@ -70,7 +70,7 @@ func HandleRevenue(ctx context.Context, pool *pgxpool.Pool, payload json.RawMess
 	rows, err := pool.Query(ctx, `
 		SELECT day::text, total_revenue_cents, order_count, avg_order_cents
 		FROM silver.daily_orders
-		WHERE shop_id = $1 AND day >= $2 AND day < $3
+		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 		ORDER BY day
 	`, req.ShopID, start, end)
 	if err != nil {
