@@ -52,7 +52,7 @@ func HandleDashboard(ctx context.Context, pool *pgxpool.Pool, payload json.RawMe
 		return nil, fmt.Errorf("shopId and period are required")
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	start, end := resolveRange(req.Period, req.From, req.To, now)
 	prevStart, prevEnd := resolveRange(req.Period, "", "", start.Add(-time.Second))
 
@@ -139,7 +139,8 @@ func queryTimeSeries(ctx context.Context, pool *pgxpool.Pool, shopID string, sta
 }
 
 func periodRange(period string, ref time.Time) (time.Time, time.Time) {
-	end := time.Date(ref.Year(), ref.Month(), ref.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+	u := ref.UTC()
+	end := time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
 	switch period {
 	case "24h":
 		return end.Add(-24 * time.Hour), end
