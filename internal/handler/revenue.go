@@ -12,6 +12,8 @@ type RevenueRequest struct {
 	ShopID   string `json:"shopId"`
 	TenantID string `json:"tenantId"`
 	Period   string `json:"period"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to,omitempty"`
 }
 
 type RevenueSummary struct {
@@ -43,7 +45,7 @@ func HandleRevenue(ctx context.Context, pool *pgxpool.Pool, payload json.RawMess
 		return nil, fmt.Errorf("shopId and period are required")
 	}
 
-	start, end := periodRange(req.Period, timeNow())
+	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
 
 	// Summary
 	var summary RevenueSummary

@@ -13,6 +13,8 @@ type DashboardRequest struct {
 	ShopID   string `json:"shopId"`
 	TenantID string `json:"tenantId"`
 	Period   string `json:"period"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to,omitempty"`
 }
 
 type DashboardKPI struct {
@@ -51,8 +53,8 @@ func HandleDashboard(ctx context.Context, pool *pgxpool.Pool, payload json.RawMe
 	}
 
 	now := time.Now()
-	start, end := periodRange(req.Period, now)
-	prevStart, prevEnd := periodRange(req.Period, start.Add(-time.Second))
+	start, end := resolveRange(req.Period, req.From, req.To, now)
+	prevStart, prevEnd := resolveRange(req.Period, "", "", start.Add(-time.Second))
 
 	// Current KPI
 	kpi, err := queryKPI(ctx, pool, req.ShopID, start, end)
@@ -152,4 +154,19 @@ func periodRange(period string, ref time.Time) (time.Time, time.Time) {
 	default:
 		return end.Add(-30 * 24 * time.Hour), end
 	}
+}
+
+// resolveRange handles both preset periods and custom date ranges.
+// For period="custom", it parses from/to as YYYY-MM-DD strings.
+// Falls back to periodRange for preset periods.
+func resolveRange(period, from, to string, ref time.Time) (time.Time, time.Time) {
+	if period == "custom" && from != "" && to != "" {
+		start, errS := time.Parse("2006-01-02", from)
+		end, errE := time.Parse("2006-01-02", to)
+		if errS == nil && errE == nil {
+			// Include the end day fully
+			return start, end.Add(24 * time.Hour)
+		}
+	}
+	return periodRange(period, ref)
 }

@@ -12,6 +12,8 @@ type TopProductsRequest struct {
 	ShopID   string `json:"shopId"`
 	TenantID string `json:"tenantId"`
 	Period   string `json:"period"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to,omitempty"`
 	Sort     string `json:"sort"`
 	Limit    int    `json:"limit"`
 }

@@ -12,6 +12,8 @@ type FunnelRequest struct {
 	ShopID   string `json:"shopId"`
 	TenantID string `json:"tenantId"`
 	Period   string `json:"period"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to,omitempty"`
 }
 
 type FunnelStage struct {
@@ -34,7 +36,7 @@ func HandleFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessa
 		return nil, fmt.Errorf("shopId and period are required")
 	}
 
-	start, end := periodRange(req.Period, timeNow())
+	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
 
 	// Total visits = all unique sessions (same as "Посещаемость" on dashboard)
 	var totalSessions int64

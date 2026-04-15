@@ -13,6 +13,8 @@ type ReturningCustomersRequest struct {
 	ShopID   string `json:"shopId"`
 	TenantID string `json:"tenantId"`
 	Period   string `json:"period"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to,omitempty"`
 }
 
 type ReturningCustomersResponse struct {
@@ -30,7 +32,7 @@ func HandleReturningCustomers(ctx context.Context, pool *pgxpool.Pool, payload j
 		return nil, fmt.Errorf("shopId and period are required")
 	}
 
-	start, end := periodRange(req.Period, timeNow())
+	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
 
 	var totalBuyers, repeatBuyers int64
 	err := pool.QueryRow(ctx, `
