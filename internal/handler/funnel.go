@@ -38,10 +38,10 @@ func HandleFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessa
 
 	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
 
-	// Total visits = all unique sessions (same as "Посещаемость" on dashboard)
+	// Total visitors = unique visitors (same as "Посещаемость" on dashboard)
 	var totalSessions int64
 	err := pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(unique_sessions), 0)
+		SELECT COALESCE(SUM(unique_visitors), 0)
 		FROM silver.daily_traffic
 		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
 	`, req.ShopID, start, end).Scan(&totalSessions)

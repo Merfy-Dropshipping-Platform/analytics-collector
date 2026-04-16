@@ -94,10 +94,10 @@ func queryKPI(ctx context.Context, pool *pgxpool.Pool, shopID string, start, end
 			COALESCE(SUM(unique_visitors), 0),
 			COALESCE(SUM(unique_sessions), 0),
 			COALESCE(SUM(page_views), 0),
-			CASE WHEN SUM(unique_sessions) > 0
+			CASE WHEN SUM(unique_visitors) > 0
 				THEN LEAST(ROUND(
-					SUM(CASE WHEN unique_sessions > 0 THEN order_count ELSE 0 END)::numeric
-					/ SUM(unique_sessions) * 100, 2), 100)
+					SUM(CASE WHEN unique_visitors > 0 THEN order_count ELSE 0 END)::numeric
+					/ SUM(unique_visitors) * 100, 2), 100)
 				ELSE 0 END
 		FROM gold.dashboard_kpi
 		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
