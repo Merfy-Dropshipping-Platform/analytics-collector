@@ -67,9 +67,9 @@ func HandleFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessa
 	stages := []FunnelStage{
 		{Name: "visits", Label: "Визиты", Count: totalSessions, Rate: 100.0},
 		{Name: "product_views", Label: "Просмотр товара", Count: productViews, Rate: safeRate(productViews, totalSessions)},
-		{Name: "add_to_cart", Label: "Корзина", Count: addToCart, Rate: safeRate(addToCart, totalSessions)},
-		{Name: "checkout_starts", Label: "Оформление", Count: checkoutStarts, Rate: safeRate(checkoutStarts, totalSessions)},
-		{Name: "purchases", Label: "Покупка", Count: purchases, Rate: safeRate(purchases, totalSessions)},
+		{Name: "add_to_cart", Label: "Добавлено в корзину", Count: addToCart, Rate: safeRate(addToCart, totalSessions)},
+		{Name: "checkout_starts", Label: "Готов к оплате", Count: checkoutStarts, Rate: safeRate(checkoutStarts, totalSessions)},
+		{Name: "purchases", Label: "Оплаченные заказы", Count: purchases, Rate: safeRate(purchases, totalSessions)},
 	}
 
 	return FunnelResponse{Stages: stages}, nil
