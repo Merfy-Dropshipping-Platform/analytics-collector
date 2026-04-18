@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -86,13 +87,25 @@ func HandleTraffic(ctx context.Context, pool *pgxpool.Pool, payload json.RawMess
 	}
 	defer rows.Close()
 
-	var ts []TrafficTS
+	dataByDay := make(map[string]TrafficTS)
 	for rows.Next() {
 		var t TrafficTS
 		if err := rows.Scan(&t.Day, &t.Visitors, &t.Sessions, &t.PageViews); err != nil {
 			return nil, err
 		}
-		ts = append(ts, t)
+		key := t.Day[:10]
+		t.Day = key
+		dataByDay[key] = t
+	}
+
+	var ts []TrafficTS
+	for d := start; d.Before(end); d = d.Add(24 * time.Hour) {
+		key := d.Format("2006-01-02")
+		if entry, ok := dataByDay[key]; ok {
+			ts = append(ts, entry)
+		} else {
+			ts = append(ts, TrafficTS{Day: key})
+		}
 	}
 
 	// Top pages (from bronze for page_url detail)
