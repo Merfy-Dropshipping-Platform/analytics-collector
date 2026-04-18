@@ -90,8 +90,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Maintenance loop: refresh matviews every 5 min, partition retention 30 days
-	db.StartMaintenanceLoop(ctx, pool, 5*time.Minute, 30*24*time.Hour)
+	// Maintenance loop: refresh matviews every 1 min, partition retention 30 days
+	db.StartMaintenanceLoop(ctx, pool, 1*time.Minute, 30*24*time.Hour)
 
 	// HTTP Server
 	r := chi.NewRouter()
