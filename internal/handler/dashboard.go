@@ -69,9 +69,19 @@ func HandleDashboard(ctx context.Context, pool *pgxpool.Pool, payload json.RawMe
 	}
 
 	// Time series
-	ts, err := queryTimeSeries(ctx, pool, req.ShopID, start, end)
-	if err != nil {
-		return nil, err
+	var ts []DashboardTimeSeries
+	if req.Period == "24h" {
+		// Intraday: 2-hour UTC buckets read LIVE from bronze.events.
+		byBucket, errTS := queryIntradayBuckets(ctx, pool, req.ShopID, start, end)
+		if errTS != nil {
+			return nil, errTS
+		}
+		ts = buildIntradayBuckets(start, end, byBucket)
+	} else {
+		ts, err = queryTimeSeries(ctx, pool, req.ShopID, start, end)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return DashboardResponse{
@@ -148,6 +158,73 @@ func queryTimeSeries(ctx context.Context, pool *pgxpool.Pool, shopID string, sta
 		}
 	}
 	return ts, nil
+}
+
+// queryIntradayBuckets reads 2-hour UTC buckets LIVE from bronze.events for the
+// given [start, end) window. Buckets are keyed by floor(epoch/7200) so they
+// align with the loop in buildIntradayBuckets. Used only for the "24h" period.
+func queryIntradayBuckets(ctx context.Context, pool *pgxpool.Pool, shopID string, start, end time.Time) (map[int64]DashboardTimeSeries, error) {
+	rows, err := pool.Query(ctx, `
+		WITH deduped_orders AS (
+			SELECT (floor(extract(epoch from created_at)/7200))::bigint AS bucket_idx, order_id, event_type, MAX(order_total_cents) AS order_total_cents
+			FROM bronze.events
+			WHERE shop_id=$1 AND created_at >= $2 AND created_at < $3 AND event_type IN ('purchase','order_cancel') AND order_id IS NOT NULL
+			GROUP BY 1, order_id, event_type
+		),
+		orders AS (
+			SELECT bucket_idx,
+				COUNT(*) FILTER (WHERE event_type='purchase') - COUNT(*) FILTER (WHERE event_type='order_cancel') AS order_count,
+				COALESCE(SUM(order_total_cents) FILTER (WHERE event_type='purchase'),0) - COALESCE(SUM(order_total_cents) FILTER (WHERE event_type='order_cancel'),0) AS total_revenue_cents
+			FROM deduped_orders GROUP BY bucket_idx
+		),
+		traffic AS (
+			SELECT (floor(extract(epoch from created_at)/7200))::bigint AS bucket_idx,
+				COUNT(*) FILTER (WHERE event_type='page_view') AS page_views,
+				COUNT(DISTINCT session_id) FILTER (WHERE event_type IN ('page_view','session_start')) AS unique_sessions,
+				COUNT(DISTINCT visitor_id) AS unique_visitors
+			FROM bronze.events WHERE shop_id=$1 AND created_at >= $2 AND created_at < $3 GROUP BY 1
+		)
+		SELECT COALESCE(t.bucket_idx,o.bucket_idx) AS bucket_idx, COALESCE(o.total_revenue_cents,0), COALESCE(o.order_count,0), COALESCE(t.unique_visitors,0), COALESCE(t.unique_sessions,0), COALESCE(t.page_views,0)
+		FROM traffic t FULL OUTER JOIN orders o ON t.bucket_idx = o.bucket_idx
+	`, shopID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byBucket := make(map[int64]DashboardTimeSeries)
+	for rows.Next() {
+		var bucketIdx int64
+		var t DashboardTimeSeries
+		if err := rows.Scan(&bucketIdx, &t.RevenueCents, &t.Orders, &t.Visitors, &t.Sessions, &t.PageViews); err != nil {
+			return nil, err
+		}
+		byBucket[bucketIdx] = t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return byBucket, nil
+}
+
+// buildIntradayBuckets walks 2-hour steps over [start, end) and emits exactly
+// one entry per window (12 for a 24h window), in ascending order. Each entry's
+// Day is an ISO datetime "YYYY-MM-DDTHH:00" whose first 10 chars stay
+// YYYY-MM-DD. Populated buckets come from byBucket (keyed by floor(epoch/7200));
+// empty windows are zero-filled. Pure and DB-free for unit testing.
+func buildIntradayBuckets(start, end time.Time, byBucket map[int64]DashboardTimeSeries) []DashboardTimeSeries {
+	var ts []DashboardTimeSeries
+	for t := start; t.Before(end); t = t.Add(2 * time.Hour) {
+		idx := t.Unix() / 7200
+		day := t.UTC().Format("2006-01-02T15:04")
+		if entry, ok := byBucket[idx]; ok {
+			entry.Day = day
+			ts = append(ts, entry)
+		} else {
+			ts = append(ts, DashboardTimeSeries{Day: day})
+		}
+	}
+	return ts
 }
 
 func periodRange(period string, ref time.Time) (time.Time, time.Time) {
