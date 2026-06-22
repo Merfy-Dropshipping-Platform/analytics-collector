@@ -49,7 +49,7 @@ FROM bronze.events
 WHERE created_at >= now() - INTERVAL '13 months'
 GROUP BY shop_id, tenant_id, date_trunc('day', created_at)::date;
 
-CREATE UNIQUE INDEX ON silver.daily_funnel (shop_id, day);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_daily_funnel ON silver.daily_funnel (shop_id, day);
 
 -- Daily channel attribution
 CREATE MATERIALIZED VIEW IF NOT EXISTS silver.daily_channel_attribution AS
@@ -68,5 +68,8 @@ WHERE created_at >= now() - INTERVAL '13 months'
 GROUP BY shop_id, tenant_id, date_trunc('day', created_at)::date,
          COALESCE(utm_source, 'direct'), utm_medium, utm_campaign;
 
-CREATE UNIQUE INDEX ON silver.daily_channel_attribution
-    (shop_id, day, channel, COALESCE(utm_medium, ''), COALESCE(utm_campaign, ''));
+-- Column-based (no expressions) + NULLS NOT DISTINCT so it is eligible for
+-- REFRESH MATERIALIZED VIEW CONCURRENTLY. NULLS NOT DISTINCT treats NULL utm_medium/
+-- utm_campaign as equal, preserving one row per group (matches the GROUP BY above).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_daily_channel_attribution ON silver.daily_channel_attribution
+    (shop_id, day, channel, utm_medium, utm_campaign) NULLS NOT DISTINCT;
