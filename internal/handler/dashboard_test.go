@@ -137,3 +137,30 @@ func TestResolveRangeCustomAndFallback(t *testing.T) {
 		t.Fatalf("unknown token should default to 30d window, got %v", uEnd.Sub(uStart))
 	}
 }
+
+// The intraday gate keys off the RESOLVED window width (== 24h), so BOTH the "24h"
+// preset and a custom single calendar date (from==to) qualify, while multi-day ranges
+// and longer presets stay on the daily path.
+func TestSingleDayWindowGate(t *testing.T) {
+	ref := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name          string
+		period        string
+		from, to      string
+		wantSingleDay bool
+	}{
+		{"24h preset", "24h", "", "", true},
+		{"custom single calendar day", "custom", "2026-06-14", "2026-06-14", true},
+		{"custom two-day range", "custom", "2026-06-14", "2026-06-15", false},
+		{"7d preset", "7d", "", "", false},
+		{"30d preset", "30d", "", "", false},
+	}
+	for _, c := range cases {
+		start, end := resolveRange(c.period, c.from, c.to, ref)
+		gotSingleDay := end.Sub(start) == 24*time.Hour
+		if gotSingleDay != c.wantSingleDay {
+			t.Errorf("%s: window [%v,%v) width %v -> singleDay=%v, want %v",
+				c.name, start, end, end.Sub(start), gotSingleDay, c.wantSingleDay)
+		}
+	}
+}

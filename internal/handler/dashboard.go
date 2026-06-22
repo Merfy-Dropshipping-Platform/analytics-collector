@@ -68,10 +68,17 @@ func HandleDashboard(ctx context.Context, pool *pgxpool.Pool, payload json.RawMe
 		return nil, err
 	}
 
-	// Time series
+	// Time series.
+	// Intraday (12 two-hour buckets, read LIVE from bronze.events) when the resolved window is a
+	// single day AND that day is still within bronze retention (~30 days). This covers both the
+	// "24h" preset and a custom single calendar date (from==to), which resolve to the same 24h
+	// window. Older single days fall back to the daily gold path (gold.dashboard_kpi retains
+	// 13 months); reading bronze for them would return empty buckets and silently drop data.
+	singleDay := end.Sub(start) == 24*time.Hour
+	withinBronzeRetention := !start.Before(now.AddDate(0, 0, -30))
+
 	var ts []DashboardTimeSeries
-	if req.Period == "24h" {
-		// Intraday: 2-hour UTC buckets read LIVE from bronze.events.
+	if singleDay && withinBronzeRetention {
 		byBucket, errTS := queryIntradayBuckets(ctx, pool, req.ShopID, start, end)
 		if errTS != nil {
 			return nil, errTS
