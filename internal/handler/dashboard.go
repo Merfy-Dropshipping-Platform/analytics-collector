@@ -173,10 +173,17 @@ func queryTimeSeries(ctx context.Context, pool *pgxpool.Pool, shopID string, sta
 func queryIntradayBuckets(ctx context.Context, pool *pgxpool.Pool, shopID string, start, end time.Time) (map[int64]DashboardTimeSeries, error) {
 	rows, err := pool.Query(ctx, `
 		WITH deduped_orders AS (
-			SELECT (floor(extract(epoch from created_at)/7200))::bigint AS bucket_idx, order_id, event_type, MAX(order_total_cents) AS order_total_cents
-			FROM bronze.events
-			WHERE shop_id=$1 AND created_at >= $2 AND created_at < $3 AND event_type IN ('purchase','order_cancel') AND order_id IS NOT NULL
-			GROUP BY 1, order_id, event_type
+			SELECT (floor(extract(epoch from e.created_at)/7200))::bigint AS bucket_idx, e.order_id, e.event_type, MAX(e.order_total_cents) AS order_total_cents
+			FROM bronze.events e
+			WHERE e.shop_id=$1 AND e.created_at >= $2 AND e.created_at < $3 AND e.event_type IN ('purchase','order_cancel') AND e.order_id IS NOT NULL
+			  -- Orphan guard (mirrors migration 014): subtract an order_cancel only when a paired
+			  -- purchase exists for the same (shop_id, order_id). The EXISTS subquery scans bronze
+			  -- WITHOUT the [start,end) window — the paired purchase may be on an earlier day.
+			  AND (e.event_type='purchase' OR EXISTS (
+			    SELECT 1 FROM bronze.events p
+			    WHERE p.event_type='purchase' AND p.shop_id=e.shop_id AND p.order_id=e.order_id
+			  ))
+			GROUP BY 1, e.order_id, e.event_type
 		),
 		orders AS (
 			SELECT bucket_idx,
