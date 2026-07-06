@@ -112,6 +112,7 @@ type PixelUpdateRequest struct {
 	TenantID string `json:"tenantId"`
 	IsActive *bool  `json:"is_active,omitempty"`
 	Name     *string `json:"name,omitempty"`
+	PixelID  *string `json:"pixel_id,omitempty"`
 }
 
 type PixelDeleteRequest struct {
@@ -194,6 +195,14 @@ func HandlePixelsUpdate(ctx context.Context, pool *pgxpool.Pool, payload json.Ra
 		_, err := pool.Exec(ctx,
 			"UPDATE config.tracking_pixels SET name = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3",
 			*req.Name, req.ID, req.TenantID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if req.PixelID != nil {
+		_, err := pool.Exec(ctx,
+			"UPDATE config.tracking_pixels SET pixel_id = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3",
+			*req.PixelID, req.ID, req.TenantID)
 		if err != nil {
 			return nil, err
 		}
