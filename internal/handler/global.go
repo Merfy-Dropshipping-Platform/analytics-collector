@@ -247,6 +247,84 @@ func HandleGlobalFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.Ra
 	return FunnelResponse{Stages: stages}, nil
 }
 
+type GlobalTopShopsRequest struct {
+	Period string `json:"period"`
+	From   string `json:"from,omitempty"`
+	To     string `json:"to,omitempty"`
+	Sort   string `json:"sort"`
+	Limit  int    `json:"limit"`
+}
+
+type ShopEntry struct {
+	ShopID            string `json:"shop_id"`
+	TotalRevenueCents int64  `json:"total_revenue_cents"`
+	TotalOrders       int64  `json:"total_orders"`
+	UniqueVisitors    int64  `json:"unique_visitors"`
+}
+
+type TopShopsResponse struct {
+	Shops []ShopEntry `json:"shops"`
+}
+
+// HandleGlobalTopShops — лидерборд магазинов за период: агрегат gold.dashboard_kpi
+// по shop_id (выручка/заказы/визиты). Имя/владельца магазина обогащает FE из
+// dev/sites (у коллектора только shop_id).
+func HandleGlobalTopShops(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessage) (any, error) {
+	var req GlobalTopShopsRequest
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+	if req.Period == "" {
+		return nil, fmt.Errorf("period is required")
+	}
+
+	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
+
+	limit := req.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
+
+	orderBy := "SUM(total_revenue_cents) DESC"
+	if req.Sort == "orders" {
+		orderBy = "SUM(order_count) DESC"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT shop_id,
+			COALESCE(SUM(total_revenue_cents), 0),
+			COALESCE(SUM(order_count), 0),
+			COALESCE(SUM(unique_visitors), 0)
+		FROM gold.dashboard_kpi
+		WHERE day >= $1::date AND day < $2::date
+		GROUP BY shop_id
+		ORDER BY %s
+		LIMIT $3
+	`, orderBy)
+
+	rows, err := pool.Query(ctx, query, start, end, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Инициализируем пустым (не nil), чтобы пустой лидерборд сериализовался
+	// как {"shops": []}, а не {"shops": null} — чистый контракт для FE.
+	shops := []ShopEntry{}
+	for rows.Next() {
+		var s ShopEntry
+		if err := rows.Scan(&s.ShopID, &s.TotalRevenueCents, &s.TotalOrders, &s.UniqueVisitors); err != nil {
+			return nil, err
+		}
+		shops = append(shops, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return TopShopsResponse{Shops: shops}, nil
+}
+
 type GlobalTopProductsRequest struct {
 	Period string `json:"period,omitempty"`
 	Sort   string `json:"sort"`
