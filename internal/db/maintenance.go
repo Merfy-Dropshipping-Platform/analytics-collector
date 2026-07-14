@@ -19,6 +19,7 @@ func RefreshMatviews(ctx context.Context, pool *pgxpool.Pool) {
 		"silver.daily_orders",
 		"silver.daily_funnel",
 		"silver.daily_channel_attribution",
+		"silver.daily_geo",
 	}
 
 	for _, v := range silverViews {

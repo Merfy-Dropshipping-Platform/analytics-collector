@@ -16,6 +16,7 @@ import (
 	"github.com/merfy/analytics-collector/internal/config"
 	"github.com/merfy/analytics-collector/internal/consumer"
 	"github.com/merfy/analytics-collector/internal/db"
+	"github.com/merfy/analytics-collector/internal/geo"
 	"github.com/merfy/analytics-collector/internal/handler"
 	"github.com/merfy/analytics-collector/internal/rabbitmq"
 	"github.com/merfy/analytics-collector/internal/rpc"
@@ -85,6 +86,8 @@ func main() {
 	rpcSrv.Register("analytics.global.funnel", handler.HandleGlobalFunnel)
 	rpcSrv.Register("analytics.global.top_products", handler.HandleGlobalTopProducts)
 	rpcSrv.Register("analytics.global.top_shops", handler.HandleGlobalTopShops)
+	rpcSrv.Register("analytics.global.by_location", handler.HandleGlobalByLocation)
+	rpcSrv.Register("analytics.by_location", handler.HandleByLocation) // per-shop (фаза 6)
 	rpcSrv.Register("analytics.pixels.list", handler.HandlePixelsList)
 	rpcSrv.Register("analytics.pixels.create", handler.HandlePixelsCreate)
 	rpcSrv.Register("analytics.pixels.update", handler.HandlePixelsUpdate)
@@ -113,7 +116,15 @@ func main() {
 		MaxAge:           3600,
 	}))
 
-	collectHandler := handler.NewCollectHandler(pub)
+	// Geo resolver (in-process IP→country/subject/city). Starts as NOOP so the HTTP server comes
+	// up immediately; the DB is loaded/downloaded in the BACKGROUND after ListenAndServe (below),
+	// never blocking /health or /collect (avoids a first-boot download killing the healthcheck).
+	// On any failure it stays noop (geo=null, ingest unaffected).
+	geoCfg := geo.LoadConfig()
+	geoResolver := geo.NewResolver(nil)
+	defer geoResolver.Close()
+
+	collectHandler := handler.NewCollectHandler(pub, geoResolver)
 	healthHandler := handler.NewHealthHandler()
 	pixelsHTTPHandler := handler.NewPixelsHTTPHandler(pool)
 
@@ -144,6 +155,17 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+
+	// Load the geo DB in the BACKGROUND so a first-boot mmdb download (up to 5 min) never delays
+	// the HTTP server / Docker healthcheck. Resolver serves geo=null until ready, then hot-swaps.
+	go func() {
+		if err := geoResolver.Bootstrap(ctx, geoCfg); err != nil {
+			slog.Warn("geo bootstrap failed (geo=null until refresh)", "error", err)
+			return
+		}
+		slog.Info("geo resolver ready", "provider", geoResolver.ProviderName())
+	}()
+	geo.StartRefreshLoop(ctx, geoResolver, geoCfg, 30*24*time.Hour)
 
 	sig := <-sigCh
 	slog.Info("shutdown signal received", "signal", sig)

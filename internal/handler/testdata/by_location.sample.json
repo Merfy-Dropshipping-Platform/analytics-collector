@@ -1,0 +1,9 @@
+{
+  "rows": [
+    { "country": "RU", "subject": "Москва", "city": "", "sessions": 120, "orders": 8, "share": 60.0 },
+    { "country": "RU", "subject": "Санкт-Петербург", "city": "", "sessions": 50, "orders": 3, "share": 25.0 },
+    { "country": "RU", "subject": "Республика Крым", "city": "", "sessions": 20, "orders": 1, "share": 10.0 },
+    { "country": "", "subject": "", "city": "", "sessions": 10, "orders": 0, "share": 5.0 }
+  ],
+  "total_sessions": 200
+}

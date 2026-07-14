@@ -36,6 +36,10 @@ type Event struct {
 	CostPriceCents *int64  `json:"cost_price_cents,omitempty"`
 	CategoryID     *string `json:"category_id,omitempty"`
 	Timestamp      string  `json:"timestamp"`
+	// Coarse geo stamped at ingest (post-override). Raw IP is never carried here.
+	GeoCountry string `json:"geo_country,omitempty"`
+	GeoSubject string `json:"geo_subject,omitempty"`
+	GeoCity    string `json:"geo_city,omitempty"`
 }
 
 type CollectPayload struct {
@@ -191,20 +195,21 @@ func (bw *BronzeWriter) insertBatch(ctx context.Context, events []Event) error {
 		utm_source, utm_medium, utm_campaign,
 		product_id, product_name, product_price_cents,
 		order_id, order_total_cents, event_timestamp,
-		cost_price_cents, category_id
+		cost_price_cents, category_id,
+		geo_country, geo_subject, geo_city
 	) VALUES `)
 
-	const colCount = 19
+	const colCount = 22
 	args := make([]any, 0, len(events)*colCount)
 	for i, e := range events {
 		if i > 0 {
 			b.WriteString(",")
 		}
 		base := i * colCount
-		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 			base+1, base+2, base+3, base+4, base+5, base+6, base+7,
 			base+8, base+9, base+10, base+11, base+12, base+13, base+14,
-			base+15, base+16, base+17, base+18, base+19)
+			base+15, base+16, base+17, base+18, base+19, base+20, base+21, base+22)
 
 		ts, _ := time.Parse(time.RFC3339, e.Timestamp)
 		if ts.IsZero() {
@@ -218,6 +223,7 @@ func (bw *BronzeWriter) insertBatch(ctx context.Context, events []Event) error {
 			nilIfEmpty(e.ProductID), nilIfEmpty(e.ProductName), nilIfZero(e.ProductPrice),
 			nilIfEmpty(e.OrderID), nilIfZero(e.OrderTotal), ts,
 			e.CostPriceCents, e.CategoryID,
+			nilIfEmpty(e.GeoCountry), nilIfEmpty(e.GeoSubject), nilIfEmpty(e.GeoCity),
 		)
 	}
 

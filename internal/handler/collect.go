@@ -1,19 +1,24 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/merfy/analytics-collector/internal/geo"
 	"github.com/merfy/analytics-collector/internal/rabbitmq"
 	"github.com/merfy/analytics-collector/internal/util"
 )
 
 type CollectRequest struct {
-	ShopID string         `json:"shop_id"`
-	Events []CollectEvent `json:"events"`
+	ShopID string `json:"shop_id"`
+	// TenantID is a top-level passthrough: bronze_writer reads tenant_id from the payload,
+	// so it MUST survive the geo re-marshal below (without this field it would be dropped).
+	TenantID string         `json:"tenant_id,omitempty"`
+	Events   []CollectEvent `json:"events"`
 }
 
 type CollectEvent struct {
@@ -36,6 +41,11 @@ type CollectEvent struct {
 	CostPriceCents *int64      `json:"cost_price_cents,omitempty"`
 	CategoryID     *string     `json:"category_id,omitempty"`
 	Timestamp      string      `json:"timestamp"`
+	// Geo is stamped server-side from the client IP at ingest (never sent by the client);
+	// the raw IP is not persisted (152-ФЗ).
+	GeoCountry string `json:"geo_country,omitempty"`
+	GeoSubject string `json:"geo_subject,omitempty"`
+	GeoCity    string `json:"geo_city,omitempty"`
 }
 
 var validEventTypes = map[string]bool{
@@ -49,12 +59,20 @@ var validEventTypes = map[string]bool{
 	"order_cancel":     true,
 }
 
-type CollectHandler struct {
-	publisher *rabbitmq.Publisher
+// eventPublisher is the minimal seam CollectHandler needs from the RMQ publisher. It keeps
+// the exported constructor's concrete signature while letting tests inject a capturing fake
+// (the RMQ transport is not what the hot-path tests exercise). *rabbitmq.Publisher satisfies it.
+type eventPublisher interface {
+	Publish(ctx context.Context, body []byte) error
 }
 
-func NewCollectHandler(pub *rabbitmq.Publisher) *CollectHandler {
-	return &CollectHandler{publisher: pub}
+type CollectHandler struct {
+	publisher eventPublisher
+	geo       *geo.Resolver
+}
+
+func NewCollectHandler(pub *rabbitmq.Publisher, g *geo.Resolver) *CollectHandler {
+	return &CollectHandler{publisher: pub, geo: g}
 }
 
 func (h *CollectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +126,24 @@ func (h *CollectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			req.Events[i].Timestamp = time.Now().UTC().Format(time.RFC3339)
+		}
+	}
+
+	// Geo enrichment (graceful, in-process, ~microseconds). middleware.RealIP already put
+	// the real client IP in r.RemoteAddr. We resolve ONE geo per batch and stamp it on every
+	// event, then re-marshal. The raw IP is NEVER placed into req/body/logs (152-ФЗ). On any
+	// hiccup (unlocatable IP, marshal error) geo stays null and we ship the original body —
+	// /collect never fails because of geo.
+	if h.geo != nil {
+		if loc := h.geo.Resolve(r.RemoteAddr); !loc.IsZero() {
+			for i := range req.Events {
+				req.Events[i].GeoCountry = loc.CountryISO
+				req.Events[i].GeoSubject = loc.Subject
+				req.Events[i].GeoCity = loc.City
+			}
+			if out, err := json.Marshal(req); err == nil {
+				body = out
+			}
 		}
 	}
 
