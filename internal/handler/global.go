@@ -264,6 +264,9 @@ type ShopEntry struct {
 
 type TopShopsResponse struct {
 	Shops []ShopEntry `json:"shops"`
+	// Число магазинов с любой активностью (визит/заказ/выручка) за период —
+	// COUNT DISTINCT, не ограничено лимитом лидерборда.
+	ActiveShopsCount int64 `json:"active_shops_count"`
 }
 
 // HandleGlobalTopShops — лидерборд магазинов за период: агрегат gold.dashboard_kpi
@@ -322,7 +325,20 @@ func HandleGlobalTopShops(ctx context.Context, pool *pgxpool.Pool, payload json.
 		return nil, err
 	}
 
-	return TopShopsResponse{Shops: shops}, nil
+	// Всего активных магазинов за период (distinct, без лимита) — для «здоровья
+	// платформы». Активный = есть хоть какая-то активность в окне.
+	var activeCount int64
+	err = pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT shop_id)
+		FROM gold.dashboard_kpi
+		WHERE day >= $1::date AND day < $2::date
+		  AND (total_revenue_cents > 0 OR order_count > 0 OR unique_visitors > 0)
+	`, start, end).Scan(&activeCount)
+	if err != nil {
+		return nil, err
+	}
+
+	return TopShopsResponse{Shops: shops, ActiveShopsCount: activeCount}, nil
 }
 
 type GlobalTopProductsRequest struct {
