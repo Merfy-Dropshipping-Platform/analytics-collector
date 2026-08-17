@@ -3,16 +3,30 @@ package consumer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/merfy/analytics-collector/internal/rabbitmq"
 	"github.com/merfy/analytics-collector/internal/util"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+const (
+	// rawExchange / rawQueue — fanout-топология сырых событий с витрин.
+	// Те же имена и параметры объявляет publisher (internal/rabbitmq/publisher.go).
+	rawExchange = "analytics.raw"
+	rawQueue    = "analytics.raw.consumer"
+)
+
+// errClosed возвращается, когда writer уже остановлен: реконнект-цикл по этой
+// ошибке выходит, а не пытается подключаться снова.
+var errClosed = errors.New("bronze writer closed")
 
 type Event struct {
 	ShopID         string  `json:"shop_id"`
@@ -49,14 +63,26 @@ type CollectPayload struct {
 }
 
 type BronzeWriter struct {
-	pool       *pgxpool.Pool
-	conn       *amqp.Connection
-	ch         *amqp.Channel
-	connURL    string
-	batchSize  int
-	flushSec   int
-	buffer     []Event
-	mu         sync.Mutex
+	pool      *pgxpool.Pool
+	connURL   string
+	batchSize int
+	flushSec  int
+
+	buffer []Event
+	mu     sync.Mutex
+
+	// connMu защищает conn/ch/closed: их переписывает реконнект-горутина, а Close()
+	// приходит из main при shutdown. Dial под локом НЕ держим — иначе Close
+	// заблокируется на таймауте подключения и сломает graceful shutdown.
+	connMu sync.Mutex
+	conn   *amqp.Connection
+	ch     *amqp.Channel
+	closed bool
+
+	// alive — признак живости подписки для /health. Без него мёртвый консьюмер
+	// снаружи неотличим от здорового сервиса.
+	alive atomic.Bool
+
 	cancelFunc context.CancelFunc
 }
 
@@ -85,20 +111,52 @@ func (bw *BronzeWriter) connect() error {
 		conn.Close()
 		return fmt.Errorf("consumer channel: %w", err)
 	}
-
-	if err := ch.Qos(100, 0, false); err != nil {
+	fail := func(err error) error {
 		ch.Close()
 		conn.Close()
-		return fmt.Errorf("consumer qos: %w", err)
+		return err
 	}
 
+	// Топологию объявляем на КАЖДОМ подключении. Раньше её объявлял только
+	// publisher; если брокер перезапустится и потеряет очередь, Consume по
+	// несуществующей очереди сразу закроет канал и реконнект будет крутиться
+	// вечно. Параметры обязаны совпадать с publisher'ом
+	// (internal/rabbitmq/publisher.go), иначе брокер ответит PRECONDITION_FAILED.
+	if err := ch.ExchangeDeclare(rawExchange, "fanout", true, false, false, false, nil); err != nil {
+		return fail(fmt.Errorf("consumer declare exchange: %w", err))
+	}
+	if _, err := ch.QueueDeclare(rawQueue, true, false, false, false, nil); err != nil {
+		return fail(fmt.Errorf("consumer declare queue: %w", err))
+	}
+	if err := ch.QueueBind(rawQueue, "", rawExchange, false, nil); err != nil {
+		return fail(fmt.Errorf("consumer bind queue: %w", err))
+	}
+	if err := ch.Qos(100, 0, false); err != nil {
+		return fail(fmt.Errorf("consumer qos: %w", err))
+	}
+
+	bw.connMu.Lock()
+	defer bw.connMu.Unlock()
+	if bw.closed {
+		ch.Close()
+		conn.Close()
+		return errClosed
+	}
+	// Прошлые conn/ch после обрыва остаются полуживыми объектами — закрываем,
+	// чтобы не течь сокетами при каждом переподключении.
+	if bw.ch != nil {
+		bw.ch.Close()
+	}
+	if bw.conn != nil {
+		bw.conn.Close()
+	}
 	bw.conn = conn
 	bw.ch = ch
 	return nil
 }
 
 func (bw *BronzeWriter) Start(ctx context.Context) error {
-	msgs, err := bw.ch.Consume("analytics.raw.consumer", "", false, false, false, false, nil)
+	msgs, err := bw.consume()
 	if err != nil {
 		return fmt.Errorf("consume: %w", err)
 	}
@@ -106,28 +164,129 @@ func (bw *BronzeWriter) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	bw.cancelFunc = cancel
 
-	ticker := time.NewTicker(time.Duration(bw.flushSec) * time.Second)
+	bw.alive.Store(true)
 
+	consumeDone := make(chan struct{})
 	go func() {
+		defer close(consumeDone)
+		bw.consumeLoop(ctx, msgs)
+	}()
+
+	// Флаш вынесен в отдельную горутину. Раньше тикер сидел в том же select, что и
+	// доставки: на время переподключения (до 30 с между попытками) буфер вообще не
+	// сбрасывался бы в БД, и уже подтверждённые события висели бы в памяти.
+	go func() {
+		ticker := time.NewTicker(time.Duration(bw.flushSec) * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-consumeDone:
+				// Финальный флаш — только после остановки консьюмера, иначе можно
+				// потерять батч, который тот успел заакать уже после нашего флаша.
 				bw.flush(context.Background())
 				return
-			case msg, ok := <-msgs:
-				if !ok {
-					return
-				}
-				bw.handleMessage(msg)
 			case <-ticker.C:
 				bw.flush(ctx)
 			}
 		}
 	}()
 
-	slog.Info("bronze writer started", "batch_size", bw.batchSize, "flush_sec", bw.flushSec)
+	slog.Info("bronze writer started", "batch_size", bw.batchSize, "flush_sec", bw.flushSec, "queue", rawQueue)
 	return nil
+}
+
+// Alive сообщает /health, жива ли подписка на analytics.raw.consumer.
+func (bw *BronzeWriter) Alive() bool {
+	return bw.alive.Load()
+}
+
+func (bw *BronzeWriter) consume() (<-chan amqp.Delivery, error) {
+	bw.connMu.Lock()
+	ch := bw.ch
+	closed := bw.closed
+	bw.connMu.Unlock()
+	if closed || ch == nil {
+		return nil, errClosed
+	}
+	return ch.Consume(rawQueue, "", false, false, false, false, nil)
+}
+
+// consumeLoop обрабатывает доставки и переподключается, когда брокер закрывает канал.
+func (bw *BronzeWriter) consumeLoop(ctx context.Context, msgs <-chan amqp.Delivery) {
+	defer bw.alive.Store(false)
+
+	for {
+		if !bw.drain(ctx, msgs) {
+			return // штатное завершение по ctx — реконнектиться не надо
+		}
+
+		bw.alive.Store(false)
+		slog.Error("bronze writer delivery channel closed, consumer is down", "queue", rawQueue)
+
+		next, ok := bw.reconnect(ctx)
+		if !ok {
+			return
+		}
+		msgs = next
+		bw.alive.Store(true)
+		slog.Info("bronze writer consumer restored", "queue", rawQueue)
+	}
+}
+
+// drain читает доставки, пока канал жив. Возвращает true, если канал доставки
+// закрыт брокером (нужен реконнект), и false — если пришла отмена по ctx.
+func (bw *BronzeWriter) drain(ctx context.Context, msgs <-chan amqp.Delivery) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case msg, ok := <-msgs:
+			if !ok {
+				// ВАЖНО: здесь НЕЛЬЗЯ просто выйти из горутины. RabbitMQ закрывает
+				// канал доставки при любом обрыве соединения/канала, и раньше на этом
+				// месте стоял `return` — горутина умирала молча, без лога и без
+				// переподключения. Контейнер оставался healthy, а analytics.raw.consumer
+				// копила сообщения при нуле консьюмеров: события с витрин просто
+				// перестают доезжать в bronze, и это видно только по пустым графикам.
+				return true
+			}
+			bw.handleMessage(msg)
+		}
+	}
+}
+
+// reconnect переподключается с экспоненциальным бэкоффом и возобновляет Consume.
+// Возвращает false, если пора завершаться (ctx отменён или writer закрыт).
+func (bw *BronzeWriter) reconnect(ctx context.Context) (<-chan amqp.Delivery, bool) {
+	delay := rabbitmq.ReconnectMinDelay
+	for attempt := 1; ; attempt++ {
+		// Пауза ДО попытки, а не после: обрыв обычно означает, что брокера прямо
+		// сейчас нет, и мгновенный ретрай только сожжёт CPU.
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(delay):
+		}
+
+		msgs, err := bw.reconnectOnce()
+		if err == nil {
+			return msgs, true
+		}
+		if errors.Is(err, errClosed) {
+			return nil, false
+		}
+		if rabbitmq.ShouldLogAttempt(attempt) {
+			slog.Error("bronze writer reconnect failed", "queue", rawQueue, "attempt", attempt, "retry_in", delay.String(), "error", err)
+		}
+		delay = rabbitmq.NextReconnectDelay(delay)
+	}
+}
+
+func (bw *BronzeWriter) reconnectOnce() (<-chan amqp.Delivery, error) {
+	if err := bw.connect(); err != nil {
+		return nil, err
+	}
+	return bw.consume()
 }
 
 func (bw *BronzeWriter) handleMessage(msg amqp.Delivery) {
@@ -249,6 +408,10 @@ func (bw *BronzeWriter) Close() {
 	if bw.cancelFunc != nil {
 		bw.cancelFunc()
 	}
+	bw.connMu.Lock()
+	defer bw.connMu.Unlock()
+	bw.closed = true
+	bw.alive.Store(false)
 	if bw.ch != nil {
 		bw.ch.Close()
 	}

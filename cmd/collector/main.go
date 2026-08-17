@@ -125,7 +125,13 @@ func main() {
 	defer geoResolver.Close()
 
 	collectHandler := handler.NewCollectHandler(pub, geoResolver)
-	healthHandler := handler.NewHealthHandler()
+	// /health отражает живость AMQP-подписок: без этого мёртвый консьюмер снаружи
+	// неотличим от здорового сервиса (HTTP отвечает, матвью обновляются, контейнер
+	// healthy), и простой аналитики держится сутками, пока кто-нибудь не заметит.
+	healthHandler := handler.NewHealthHandler(
+		handler.Probe{Name: "rpc", Alive: rpcSrv.Alive},
+		handler.Probe{Name: "bronze_writer", Alive: bw.Alive},
+	)
 	pixelsHTTPHandler := handler.NewPixelsHTTPHandler(pool)
 
 	r.Post("/collect", collectHandler.ServeHTTP)
