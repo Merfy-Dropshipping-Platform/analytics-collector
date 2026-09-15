@@ -13,14 +13,22 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/merfy/analytics-collector/internal/config"
 	"github.com/merfy/analytics-collector/internal/consumer"
 	"github.com/merfy/analytics-collector/internal/db"
 	"github.com/merfy/analytics-collector/internal/geo"
 	"github.com/merfy/analytics-collector/internal/handler"
 	"github.com/merfy/analytics-collector/internal/rabbitmq"
+	"github.com/merfy/analytics-collector/internal/retry"
 	"github.com/merfy/analytics-collector/internal/rpc"
 )
+
+// startupDialBudget — сколько ждём зависимости на ХОЛОДНОМ старте. Трёх минут
+// хватает, чтобы RabbitMQ поднялся после ребута хоста (сервер перезагружается
+// примерно раз в неделю под апгрейды ядра и стартует нас раньше брокера).
+// Дальше падаем: неверный URL должен падать громко, а не висеть молча.
+const startupDialBudget = 3 * time.Minute
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -34,8 +42,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Стартовые подключения повторяем тем же бэкоффом, что и реконнект уже
+	// установленного соединения, — поведение при недоступном брокере одно и
+	// то же. Зачем вообще ретрай на старте: см. internal/retry.
+	startupPolicy := retry.Policy{
+		Budget:    startupDialBudget,
+		Next:      rabbitmq.NextReconnectDelay,
+		ShouldLog: rabbitmq.ShouldLogAttempt,
+	}
+
 	// Database
-	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
+	pool, err := retry.Dial(ctx, "postgres", startupPolicy, func() (*pgxpool.Pool, error) {
+		return db.NewPool(ctx, cfg.DatabaseURL)
+	})
 	if err != nil {
 		slog.Error("connect db", "error", err)
 		os.Exit(1)
@@ -44,7 +63,9 @@ func main() {
 	slog.Info("database connected")
 
 	// RabbitMQ Publisher
-	pub, err := rabbitmq.NewPublisher(cfg.RabbitMQURL)
+	pub, err := retry.Dial(ctx, "rabbitmq publisher", startupPolicy, func() (*rabbitmq.Publisher, error) {
+		return rabbitmq.NewPublisher(cfg.RabbitMQURL)
+	})
 	if err != nil {
 		slog.Error("connect rabbitmq publisher", "error", err)
 		os.Exit(1)
@@ -53,7 +74,9 @@ func main() {
 	slog.Info("rabbitmq publisher connected")
 
 	// Bronze Writer (consumer)
-	bw, err := consumer.NewBronzeWriter(pool, cfg.RabbitMQURL, cfg.BatchSize, cfg.FlushSeconds)
+	bw, err := retry.Dial(ctx, "bronze writer", startupPolicy, func() (*consumer.BronzeWriter, error) {
+		return consumer.NewBronzeWriter(pool, cfg.RabbitMQURL, cfg.BatchSize, cfg.FlushSeconds)
+	})
 	if err != nil {
 		slog.Error("create bronze writer", "error", err)
 		os.Exit(1)
@@ -66,7 +89,9 @@ func main() {
 	}
 
 	// RPC Server
-	rpcSrv, err := rpc.NewServer(pool, cfg.RabbitMQURL)
+	rpcSrv, err := retry.Dial(ctx, "rpc server", startupPolicy, func() (*rpc.Server, error) {
+		return rpc.NewServer(pool, cfg.RabbitMQURL)
+	})
 	if err != nil {
 		slog.Error("create rpc server", "error", err)
 		os.Exit(1)
