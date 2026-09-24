@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/merfy/analytics-collector/internal/db"
 )
 
 // Глобальные (платформенные) хендлеры аналитики — агрегат по ВСЕМ магазинам.
@@ -16,10 +17,9 @@ import (
 // РОВНО те же (DashboardResponse/FunnelResponse/TopProductsResponse), поэтому
 // backOffice переиспользует существующий mapAnalyticsView 1:1.
 //
-// Семантика уников (unique_visitors/unique_sessions) наследует per-shop: это сумма
-// СУТОЧНЫХ уников (посетитель активный N дней считается N раз) — тот же приближённый
-// смысл, что уже используется в per-shop дашборде; кросс-магазинное пересечение
-// visitor_id/session_id близко к нулю (разные витрины = разные куки).
+// Семантика уников (unique_visitors/unique_sessions) наследует per-shop: итоги периода —
+// уникальные за весь период (правило 1, period_uniques.go), графики — суточные уники;
+// кросс-магазинное пересечение visitor_id/session_id близко к нулю (разные витрины = разные куки).
 
 type GlobalAnalyticsRequest struct {
 	Period string `json:"period"`
@@ -36,7 +36,7 @@ func HandleGlobalDashboard(ctx context.Context, pool *pgxpool.Pool, payload json
 		return nil, fmt.Errorf("period is required")
 	}
 
-	now := time.Now().UTC()
+	now := timeNow()
 	start, end := resolveRange(req.Period, req.From, req.To, now)
 	prevStart, prevEnd := resolveRange(req.Period, "", "", start.Add(-time.Second))
 
@@ -48,11 +48,18 @@ func HandleGlobalDashboard(ctx context.Context, pool *pgxpool.Pool, payload json
 	if err != nil {
 		return nil, err
 	}
+	// Правило 1: трафик — уникальный за весь период (period_uniques.go), вся платформа.
+	if kpi, err = periodKPI(ctx, pool, "", start, end, kpi); err != nil {
+		return nil, err
+	}
+	if kpiPrev, err = periodKPI(ctx, pool, "", prevStart, prevEnd, kpiPrev); err != nil {
+		return nil, err
+	}
 
 	// Внутридневные 2-часовые бакеты (LIVE из bronze) для одиночного дня в пределах
-	// retention; иначе — суточный gold-путь. Логика 1:1 с per-shop dashboard.
+	// retention (db.RetentionMonths); иначе — суточный gold-путь. Логика 1:1 с per-shop dashboard.
 	singleDay := end.Sub(start) == 24*time.Hour
-	withinBronzeRetention := !start.Before(now.AddDate(0, 0, -30))
+	withinBronzeRetention := !start.Before(now.AddDate(0, -db.RetentionMonths, 0))
 
 	var ts []DashboardTimeSeries
 	if singleDay && withinBronzeRetention {
@@ -76,6 +83,8 @@ func HandleGlobalDashboard(ctx context.Context, pool *pgxpool.Pool, payload json
 	}, nil
 }
 
+// queryGlobalKPI — деньги платформы за период: сумма суточных строк gold.dashboard_kpi.
+// Трафик и конверсию добавляет periodKPI — уникальные за весь период (правило 1, period_uniques.go).
 func queryGlobalKPI(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) (DashboardKPI, error) {
 	var kpi DashboardKPI
 	err := pool.QueryRow(ctx, `
@@ -84,22 +93,10 @@ func queryGlobalKPI(ctx context.Context, pool *pgxpool.Pool, start, end time.Tim
 			COALESCE(SUM(order_count), 0),
 			CASE WHEN SUM(order_count) > 0
 				THEN (SUM(total_revenue_cents) / SUM(order_count))::bigint
-				ELSE 0 END,
-			COALESCE(SUM(unique_visitors), 0),
-			COALESCE(SUM(unique_sessions), 0),
-			COALESCE(SUM(page_views), 0),
-			CASE WHEN SUM(unique_visitors) > 0
-				THEN LEAST(ROUND(
-					SUM(CASE WHEN unique_visitors > 0 THEN order_count ELSE 0 END)::numeric
-					/ SUM(unique_visitors) * 100, 2), 100)
 				ELSE 0 END
 		FROM gold.dashboard_kpi
 		WHERE day >= $1::date AND day < $2::date
-	`, start, end).Scan(
-		&kpi.TotalRevenueCents, &kpi.TotalOrders, &kpi.AvgOrderCents,
-		&kpi.UniqueVisitors, &kpi.UniqueSessions, &kpi.PageViews,
-		&kpi.ConversionRate,
-	)
+	`, start, end).Scan(&kpi.TotalRevenueCents, &kpi.TotalOrders, &kpi.AvgOrderCents)
 	return kpi, err
 }
 
@@ -153,12 +150,13 @@ func queryGlobalTimeSeries(ctx context.Context, pool *pgxpool.Pool, start, end t
 // в пределах магазина, но НЕ глобально, поэтому shop_id обязателен в группировке,
 // иначе заказы разных магазинов с одинаковым order_id слились бы. session_id/
 // visitor_id — клиентские UUID, глобально уникальны → COUNT DISTINCT корректен.
+// Отрезок — по времени события; трафик — только люди, деньги — все (как в миграции 017).
 func queryGlobalIntradayBuckets(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) (map[int64]DashboardTimeSeries, error) {
 	rows, err := pool.Query(ctx, `
 		WITH deduped_orders AS (
-			SELECT (floor(extract(epoch from e.created_at)/7200))::bigint AS bucket_idx, e.shop_id, e.order_id, e.event_type, MAX(e.order_total_cents) AS order_total_cents
+			SELECT (floor(extract(epoch from e.event_timestamp)/7200))::bigint AS bucket_idx, e.shop_id, e.order_id, e.event_type, MAX(e.order_total_cents) AS order_total_cents
 			FROM bronze.events e
-			WHERE e.created_at >= $1 AND e.created_at < $2 AND e.event_type IN ('purchase','order_cancel') AND e.order_id IS NOT NULL
+			WHERE `+eventWindow("e", "$1", "$2")+` AND e.event_type IN ('purchase','order_cancel') AND e.order_id IS NOT NULL
 			  AND (e.event_type='purchase' OR EXISTS (
 			    SELECT 1 FROM bronze.events p
 			    WHERE p.event_type='purchase' AND p.shop_id=e.shop_id AND p.order_id=e.order_id
@@ -172,11 +170,11 @@ func queryGlobalIntradayBuckets(ctx context.Context, pool *pgxpool.Pool, start, 
 			FROM deduped_orders GROUP BY bucket_idx
 		),
 		traffic AS (
-			SELECT (floor(extract(epoch from created_at)/7200))::bigint AS bucket_idx,
-				COUNT(*) FILTER (WHERE event_type='page_view') AS page_views,
-				COUNT(DISTINCT session_id) FILTER (WHERE event_type IN ('page_view','session_start')) AS unique_sessions,
-				COUNT(DISTINCT visitor_id) AS unique_visitors
-			FROM bronze.events WHERE created_at >= $1 AND created_at < $2 GROUP BY 1
+			SELECT (floor(extract(epoch from e.event_timestamp)/7200))::bigint AS bucket_idx,
+				COUNT(*) FILTER (WHERE e.event_type='page_view') AS page_views,
+				COUNT(DISTINCT e.session_id) FILTER (WHERE e.event_type IN ('page_view','session_start')) AS unique_sessions,
+				COUNT(DISTINCT e.visitor_id) AS unique_visitors
+			FROM bronze.events e WHERE `+humanOnly("e")+` AND `+eventWindow("e", "$1", "$2")+` GROUP BY 1
 		)
 		SELECT COALESCE(t.bucket_idx,o.bucket_idx) AS bucket_idx, COALESCE(o.total_revenue_cents,0), COALESCE(o.order_count,0), COALESCE(t.unique_visitors,0), COALESCE(t.unique_sessions,0), COALESCE(t.page_views,0)
 		FROM traffic t FULL OUTER JOIN orders o ON t.bucket_idx = o.bucket_idx
@@ -212,29 +210,13 @@ func HandleGlobalFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.Ra
 
 	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
 
-	var totalVisitors int64
-	err := pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(unique_visitors), 0)
-		FROM silver.daily_traffic
-		WHERE day >= $1::date AND day < $2::date
-	`, start, end).Scan(&totalVisitors)
+	// Правило 1: посетители и визиты шагов — уникальные за весь период (period_uniques.go).
+	c, err := periodFunnel(ctx, pool, "", start, end)
 	if err != nil {
 		return nil, err
 	}
-
-	var productViews, addToCart, checkoutStarts, purchases int64
-	err = pool.QueryRow(ctx, `
-		SELECT
-			COALESCE(SUM(product_views), 0),
-			COALESCE(SUM(add_to_cart), 0),
-			COALESCE(SUM(checkout_starts), 0),
-			COALESCE(SUM(purchases), 0)
-		FROM silver.daily_funnel
-		WHERE day >= $1::date AND day < $2::date
-	`, start, end).Scan(&productViews, &addToCart, &checkoutStarts, &purchases)
-	if err != nil {
-		return nil, err
-	}
+	totalVisitors, productViews, addToCart, checkoutStarts, purchases :=
+		c.visitors, c.productViews, c.addToCart, c.checkoutStarts, c.purchases
 
 	stages := []FunnelStage{
 		{Name: "visits", Label: "Визиты", Count: totalVisitors, Rate: 100.0},
@@ -323,6 +305,15 @@ func HandleGlobalTopShops(ctx context.Context, pool *pgxpool.Pool, payload json.
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+
+	// Правило 1: посетители магазина — уникальные за весь период (period_uniques.go).
+	visitors, err := periodVisitorsByShop(ctx, pool, start, end)
+	if err != nil {
+		return nil, err
+	}
+	for i := range shops {
+		shops[i].UniqueVisitors = visitors[shops[i].ShopID]
 	}
 
 	// Всего активных магазинов за период (distinct, без лимита) — для «здоровья

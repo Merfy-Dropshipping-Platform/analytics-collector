@@ -123,8 +123,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Maintenance loop: refresh matviews every 1 min, partition retention 30 days
-	db.StartMaintenanceLoop(ctx, pool, 1*time.Minute, 30*24*time.Hour)
+	// Обслуживание: представления — раз в минуту, сырые события хранятся db.RetentionMonths месяцев.
+	db.StartMaintenanceLoop(ctx, pool, 1*time.Minute, db.RetentionMonths)
 
 	// HTTP Server
 	r := chi.NewRouter()

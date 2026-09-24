@@ -10,11 +10,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Exercises the real 22-column insertBatch against Postgres. pgx validates the placeholder
-// count against len(args), so a successful 2-event insert proves the $1..$44 arity, and the
-// SELECT proves the three geo_* columns are written (and privacy: no ip_address).
+// Exercises the real 23-column insertBatch against Postgres (22 + traffic_type,
+// migration 016). pgx validates the placeholder count against len(args), so a
+// successful 2-event insert proves the $1..$46 arity, and the SELECT proves the
+// three geo_* columns are written (and privacy: no ip_address). traffic_type
+// itself is covered separately in traffic_type_db_test.go.
 // Gated by build tag `dbtest` + GEO_TEST_DB.
-func TestInsertBatch22Cols_DB(t *testing.T) {
+func TestInsertBatch23Cols_DB(t *testing.T) {
 	dsn := os.Getenv("GEO_TEST_DB")
 	if dsn == "" {
 		t.Skip("GEO_TEST_DB not set")

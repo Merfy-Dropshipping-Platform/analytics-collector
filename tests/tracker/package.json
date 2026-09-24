@@ -1,0 +1,13 @@
+{
+  "name": "@merfy/analytics-collector-tracker-tests",
+  "private": true,
+  "type": "module",
+  "description": "Тесты static/tracker.js (кусок 114-P1, пометка трафика). Отдельно от static/ нарочно: Dockerfile копирует static/ целиком в прод-образ (COPY static/ /static/), а сюда — node_modules и dev-инструменты тестам вообще не место.",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.1",
+    "vitest": "^5.0.1"
+  }
+}

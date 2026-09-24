@@ -93,44 +93,11 @@ func handleByLocation(ctx context.Context, pool *pgxpool.Pool, payload json.RawM
 		shopFilter = req.ShopID
 	}
 
-	query := fmt.Sprintf(`
-		SELECT %s, SUM(sessions), SUM(orders)
-		FROM silver.daily_geo
-		WHERE day >= $1::date AND day < $2::date
-		  AND ($3::text IS NULL OR shop_id = $3)
-		GROUP BY %s
-		ORDER BY SUM(sessions) DESC
-		LIMIT $4
-	`, sel, grp)
-
-	rows, err := pool.Query(ctx, query, start, end, shopFilter, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	// Init empty (not nil) → serializes as "rows":[] for a clean FE contract.
-	result := []LocationRow{}
-	for rows.Next() {
-		var lr LocationRow
-		if err := rows.Scan(&lr.Country, &lr.Subject, &lr.City, &lr.Sessions, &lr.Orders); err != nil {
-			return nil, err
-		}
-		result = append(result, lr)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
+	// Правило 1: визит считается один раз за весь период, а не в каждом дне (period_uniques.go).
 	// total_sessions is the share denominator over ALL groups (unlimited), so shares of the
-	// (possibly limited) rows sum to ≤100 and reflect the true whole.
-	var total int64
-	err = pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(sessions), 0)
-		FROM silver.daily_geo
-		WHERE day >= $1::date AND day < $2::date
-		  AND ($3::text IS NULL OR shop_id = $3)
-	`, start, end, shopFilter).Scan(&total)
+	// (possibly limited) rows sum to ≤100 and reflect the true whole. Rows init empty (not nil)
+	// → serializes as "rows":[] for a clean FE contract.
+	result, total, err := periodLocations(ctx, pool, sel, grp, shopFilter, start, end, limit)
 	if err != nil {
 		return nil, err
 	}

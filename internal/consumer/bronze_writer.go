@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/merfy/analytics-collector/internal/rabbitmq"
+	"github.com/merfy/analytics-collector/internal/traffictype"
 	"github.com/merfy/analytics-collector/internal/util"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -29,31 +30,35 @@ const (
 var errClosed = errors.New("bronze writer closed")
 
 type Event struct {
-	ShopID         string  `json:"shop_id"`
-	TenantID       string  `json:"tenant_id,omitempty"`
-	Type           string  `json:"type"`
-	SessionID      string  `json:"session_id"`
-	VisitorID      string  `json:"visitor_id,omitempty"`
-	PageURL        string  `json:"page_url,omitempty"`
-	PageTitle      string  `json:"page_title,omitempty"`
-	Referrer       string  `json:"referrer,omitempty"`
-	UTMSource      string  `json:"utm_source,omitempty"`
-	UTMMedium      string  `json:"utm_medium,omitempty"`
-	UTMCampaign    string  `json:"utm_campaign,omitempty"`
-	ProductID      string  `json:"product_id,omitempty"`
-	ProductName    string      `json:"product_name,omitempty"`
+	ShopID          string      `json:"shop_id"`
+	TenantID        string      `json:"tenant_id,omitempty"`
+	Type            string      `json:"type"`
+	SessionID       string      `json:"session_id"`
+	VisitorID       string      `json:"visitor_id,omitempty"`
+	PageURL         string      `json:"page_url,omitempty"`
+	PageTitle       string      `json:"page_title,omitempty"`
+	Referrer        string      `json:"referrer,omitempty"`
+	UTMSource       string      `json:"utm_source,omitempty"`
+	UTMMedium       string      `json:"utm_medium,omitempty"`
+	UTMCampaign     string      `json:"utm_campaign,omitempty"`
+	ProductID       string      `json:"product_id,omitempty"`
+	ProductName     string      `json:"product_name,omitempty"`
 	ProductPriceRaw interface{} `json:"product_price,omitempty"`
-	ProductPrice   int64       `json:"-"`
-	OrderID        string      `json:"order_id,omitempty"`
-	OrderTotalRaw  interface{} `json:"order_total,omitempty"`
-	OrderTotal     int64       `json:"-"`
-	CostPriceCents *int64  `json:"cost_price_cents,omitempty"`
-	CategoryID     *string `json:"category_id,omitempty"`
-	Timestamp      string  `json:"timestamp"`
+	ProductPrice    int64       `json:"-"`
+	OrderID         string      `json:"order_id,omitempty"`
+	OrderTotalRaw   interface{} `json:"order_total,omitempty"`
+	OrderTotal      int64       `json:"-"`
+	CostPriceCents  *int64      `json:"cost_price_cents,omitempty"`
+	CategoryID      *string     `json:"category_id,omitempty"`
+	Timestamp       string      `json:"timestamp"`
 	// Coarse geo stamped at ingest (post-override). Raw IP is never carried here.
 	GeoCountry string `json:"geo_country,omitempty"`
 	GeoSubject string `json:"geo_subject,omitempty"`
 	GeoCity    string `json:"geo_city,omitempty"`
+	// TrafficType — пометка человек/бот/свои, которую уже поставил collect.go
+	// (правило 4 README, раздел «Пометка трафика»). Пишется как есть; normalizeTrafficType на
+	// insertBatch — вторая линия обороны от чужой ошибки, а не источник истины.
+	TrafficType string `json:"traffic_type,omitempty"`
 }
 
 type CollectPayload struct {
@@ -355,20 +360,21 @@ func (bw *BronzeWriter) insertBatch(ctx context.Context, events []Event) error {
 		product_id, product_name, product_price_cents,
 		order_id, order_total_cents, event_timestamp,
 		cost_price_cents, category_id,
-		geo_country, geo_subject, geo_city
+		geo_country, geo_subject, geo_city,
+		traffic_type
 	) VALUES `)
 
-	const colCount = 22
+	const colCount = 23
 	args := make([]any, 0, len(events)*colCount)
 	for i, e := range events {
 		if i > 0 {
 			b.WriteString(",")
 		}
 		base := i * colCount
-		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 			base+1, base+2, base+3, base+4, base+5, base+6, base+7,
 			base+8, base+9, base+10, base+11, base+12, base+13, base+14,
-			base+15, base+16, base+17, base+18, base+19, base+20, base+21, base+22)
+			base+15, base+16, base+17, base+18, base+19, base+20, base+21, base+22, base+23)
 
 		ts, _ := time.Parse(time.RFC3339, e.Timestamp)
 		if ts.IsZero() {
@@ -383,11 +389,25 @@ func (bw *BronzeWriter) insertBatch(ctx context.Context, events []Event) error {
 			nilIfEmpty(e.OrderID), nilIfZero(e.OrderTotal), ts,
 			e.CostPriceCents, e.CategoryID,
 			nilIfEmpty(e.GeoCountry), nilIfEmpty(e.GeoSubject), nilIfEmpty(e.GeoCity),
+			normalizeTrafficType(e.TrafficType),
 		)
 	}
 
 	_, err := bw.pool.Exec(ctx, b.String(), args...)
 	return err
+}
+
+// normalizeTrafficType — вторая линия обороны на границе с базой (первая — сама
+// классификация в internal/handler.collect.go; internal/traffictype — общее
+// место для обоих пакетов, строки не разъезжаются). Пачка пишется ОДНИМ INSERT
+// на весь батч: если бы здесь долетело "" или мусор, CHECK-констрейнт
+// chk_events_traffic_type (миграция 016) уронил бы всю вставку и события
+// зависли бы в буфере навсегда, а не одно "плохое" событие.
+func normalizeTrafficType(t string) string {
+	if traffictype.All[t] {
+		return t
+	}
+	return traffictype.Human
 }
 
 func nilIfEmpty(s string) *string {

@@ -34,17 +34,18 @@ func HandleReturningCustomers(ctx context.Context, pool *pgxpool.Pool, payload j
 
 	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
 
+	// Покупки — деньги: без фильтра по пометке трафика; окно — по времени покупки.
 	var totalBuyers, repeatBuyers int64
 	err := pool.QueryRow(ctx, `
 		WITH buyer_orders AS (
-			SELECT visitor_id, COUNT(DISTINCT order_id) AS order_count
-			FROM bronze.events
-			WHERE shop_id = $1
-			  AND event_type = 'purchase'
-			  AND visitor_id IS NOT NULL
-			  AND order_id IS NOT NULL
-			  AND created_at >= $2 AND created_at < $3
-			GROUP BY visitor_id
+			SELECT e.visitor_id, COUNT(DISTINCT e.order_id) AS order_count
+			FROM bronze.events e
+			WHERE e.shop_id = $1
+			  AND e.event_type = 'purchase'
+			  AND e.visitor_id IS NOT NULL
+			  AND e.order_id IS NOT NULL
+			  AND `+eventWindow("e", "$2", "$3")+`
+			GROUP BY e.visitor_id
 		)
 		SELECT
 			COUNT(*) AS total_buyers,
