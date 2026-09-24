@@ -61,18 +61,15 @@ func HandleTraffic(ctx context.Context, pool *pgxpool.Pool, payload json.RawMess
 
 	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
 
-	// Summary
-	var summary TrafficSummary
-	err := pool.QueryRow(ctx, `
-		SELECT
-			COALESCE(SUM(unique_visitors), 0),
-			COALESCE(SUM(unique_sessions), 0),
-			COALESCE(SUM(page_views), 0)
-		FROM silver.daily_traffic
-		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
-	`, req.ShopID, start, end).Scan(&summary.TotalVisitors, &summary.TotalSessions, &summary.TotalPageViews)
+	// Summary. Правило 1: уникальные за весь период (period_uniques.go).
+	period, err := queryPeriodTraffic(ctx, pool, req.ShopID, start, end)
 	if err != nil {
 		return nil, err
+	}
+	summary := TrafficSummary{
+		TotalVisitors:  period.visitors,
+		TotalSessions:  period.sessions,
+		TotalPageViews: period.pageViews,
 	}
 
 	// Time series

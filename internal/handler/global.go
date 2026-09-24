@@ -17,10 +17,9 @@ import (
 // РОВНО те же (DashboardResponse/FunnelResponse/TopProductsResponse), поэтому
 // backOffice переиспользует существующий mapAnalyticsView 1:1.
 //
-// Семантика уников (unique_visitors/unique_sessions) наследует per-shop: это сумма
-// СУТОЧНЫХ уников (посетитель активный N дней считается N раз) — тот же приближённый
-// смысл, что уже используется в per-shop дашборде; кросс-магазинное пересечение
-// visitor_id/session_id близко к нулю (разные витрины = разные куки).
+// Семантика уников (unique_visitors/unique_sessions) наследует per-shop: итоги периода —
+// уникальные за весь период (правило 1, period_uniques.go), графики — суточные уники;
+// кросс-магазинное пересечение visitor_id/session_id близко к нулю (разные витрины = разные куки).
 
 type GlobalAnalyticsRequest struct {
 	Period string `json:"period"`
@@ -47,6 +46,13 @@ func HandleGlobalDashboard(ctx context.Context, pool *pgxpool.Pool, payload json
 	}
 	kpiPrev, err := queryGlobalKPI(ctx, pool, prevStart, prevEnd)
 	if err != nil {
+		return nil, err
+	}
+	// Правило 1: трафик — уникальный за весь период (period_uniques.go), вся платформа.
+	if kpi, err = periodKPI(ctx, pool, "", start, end, kpi); err != nil {
+		return nil, err
+	}
+	if kpiPrev, err = periodKPI(ctx, pool, "", prevStart, prevEnd, kpiPrev); err != nil {
 		return nil, err
 	}
 
@@ -77,6 +83,8 @@ func HandleGlobalDashboard(ctx context.Context, pool *pgxpool.Pool, payload json
 	}, nil
 }
 
+// queryGlobalKPI — деньги платформы за период: сумма суточных строк gold.dashboard_kpi.
+// Трафик и конверсию добавляет periodKPI — уникальные за весь период (правило 1, period_uniques.go).
 func queryGlobalKPI(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) (DashboardKPI, error) {
 	var kpi DashboardKPI
 	err := pool.QueryRow(ctx, `
@@ -85,22 +93,10 @@ func queryGlobalKPI(ctx context.Context, pool *pgxpool.Pool, start, end time.Tim
 			COALESCE(SUM(order_count), 0),
 			CASE WHEN SUM(order_count) > 0
 				THEN (SUM(total_revenue_cents) / SUM(order_count))::bigint
-				ELSE 0 END,
-			COALESCE(SUM(unique_visitors), 0),
-			COALESCE(SUM(unique_sessions), 0),
-			COALESCE(SUM(page_views), 0),
-			CASE WHEN SUM(unique_visitors) > 0
-				THEN LEAST(ROUND(
-					SUM(CASE WHEN unique_visitors > 0 THEN order_count ELSE 0 END)::numeric
-					/ SUM(unique_visitors) * 100, 2), 100)
 				ELSE 0 END
 		FROM gold.dashboard_kpi
 		WHERE day >= $1::date AND day < $2::date
-	`, start, end).Scan(
-		&kpi.TotalRevenueCents, &kpi.TotalOrders, &kpi.AvgOrderCents,
-		&kpi.UniqueVisitors, &kpi.UniqueSessions, &kpi.PageViews,
-		&kpi.ConversionRate,
-	)
+	`, start, end).Scan(&kpi.TotalRevenueCents, &kpi.TotalOrders, &kpi.AvgOrderCents)
 	return kpi, err
 }
 
@@ -214,29 +210,13 @@ func HandleGlobalFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.Ra
 
 	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
 
-	var totalVisitors int64
-	err := pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(unique_visitors), 0)
-		FROM silver.daily_traffic
-		WHERE day >= $1::date AND day < $2::date
-	`, start, end).Scan(&totalVisitors)
+	// Правило 1: посетители и визиты шагов — уникальные за весь период (period_uniques.go).
+	c, err := periodFunnel(ctx, pool, "", start, end)
 	if err != nil {
 		return nil, err
 	}
-
-	var productViews, addToCart, checkoutStarts, purchases int64
-	err = pool.QueryRow(ctx, `
-		SELECT
-			COALESCE(SUM(product_views), 0),
-			COALESCE(SUM(add_to_cart), 0),
-			COALESCE(SUM(checkout_starts), 0),
-			COALESCE(SUM(purchases), 0)
-		FROM silver.daily_funnel
-		WHERE day >= $1::date AND day < $2::date
-	`, start, end).Scan(&productViews, &addToCart, &checkoutStarts, &purchases)
-	if err != nil {
-		return nil, err
-	}
+	totalVisitors, productViews, addToCart, checkoutStarts, purchases :=
+		c.visitors, c.productViews, c.addToCart, c.checkoutStarts, c.purchases
 
 	stages := []FunnelStage{
 		{Name: "visits", Label: "Визиты", Count: totalVisitors, Rate: 100.0},
@@ -325,6 +305,15 @@ func HandleGlobalTopShops(ctx context.Context, pool *pgxpool.Pool, payload json.
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+
+	// Правило 1: посетители магазина — уникальные за весь период (period_uniques.go).
+	visitors, err := periodVisitorsByShop(ctx, pool, start, end)
+	if err != nil {
+		return nil, err
+	}
+	for i := range shops {
+		shops[i].UniqueVisitors = visitors[shops[i].ShopID]
 	}
 
 	// Всего активных магазинов за период (distinct, без лимита) — для «здоровья

@@ -38,31 +38,14 @@ func HandleFunnel(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessa
 
 	start, end := resolveRange(req.Period, req.From, req.To, timeNow())
 
-	// Total visitors = unique visitors (same as "Посещаемость" on dashboard)
-	var totalSessions int64
-	err := pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(unique_visitors), 0)
-		FROM silver.daily_traffic
-		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
-	`, req.ShopID, start, end).Scan(&totalSessions)
+	// Total visitors = unique visitors (same as "Посещаемость" on dashboard).
+	// Правило 1: посетители и визиты шагов — уникальные за весь период (period_uniques.go).
+	c, err := periodFunnel(ctx, pool, req.ShopID, start, end)
 	if err != nil {
 		return nil, err
 	}
-
-	// Funnel stages from daily_funnel
-	var productViews, addToCart, checkoutStarts, purchases int64
-	err = pool.QueryRow(ctx, `
-		SELECT
-			COALESCE(SUM(product_views), 0),
-			COALESCE(SUM(add_to_cart), 0),
-			COALESCE(SUM(checkout_starts), 0),
-			COALESCE(SUM(purchases), 0)
-		FROM silver.daily_funnel
-		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
-	`, req.ShopID, start, end).Scan(&productViews, &addToCart, &checkoutStarts, &purchases)
-	if err != nil {
-		return nil, err
-	}
+	totalSessions, productViews, addToCart, checkoutStarts, purchases :=
+		c.visitors, c.productViews, c.addToCart, c.checkoutStarts, c.purchases
 
 	stages := []FunnelStage{
 		{Name: "visits", Label: "Визиты", Count: totalSessions, Rate: 100.0},

@@ -62,10 +62,17 @@ func HandleDashboard(ctx context.Context, pool *pgxpool.Pool, payload json.RawMe
 	if err != nil {
 		return nil, err
 	}
+	// Правило 1: трафик — уникальный за весь период (period_uniques.go).
+	if kpi, err = periodKPI(ctx, pool, req.ShopID, start, end, kpi); err != nil {
+		return nil, err
+	}
 
 	// Previous KPI
 	kpiPrev, err := queryKPI(ctx, pool, req.ShopID, prevStart, prevEnd)
 	if err != nil {
+		return nil, err
+	}
+	if kpiPrev, err = periodKPI(ctx, pool, req.ShopID, prevStart, prevEnd, kpiPrev); err != nil {
 		return nil, err
 	}
 
@@ -100,6 +107,8 @@ func HandleDashboard(ctx context.Context, pool *pgxpool.Pool, payload json.RawMe
 	}, nil
 }
 
+// queryKPI — деньги за период: сумма суточных строк gold.dashboard_kpi (деньги складываются).
+// Трафик и конверсию добавляет periodKPI — уникальные за весь период (правило 1, period_uniques.go).
 func queryKPI(ctx context.Context, pool *pgxpool.Pool, shopID string, start, end time.Time) (DashboardKPI, error) {
 	var kpi DashboardKPI
 	err := pool.QueryRow(ctx, `
@@ -108,22 +117,10 @@ func queryKPI(ctx context.Context, pool *pgxpool.Pool, shopID string, start, end
 			COALESCE(SUM(order_count), 0),
 			CASE WHEN SUM(order_count) > 0
 				THEN (SUM(total_revenue_cents) / SUM(order_count))::bigint
-				ELSE 0 END,
-			COALESCE(SUM(unique_visitors), 0),
-			COALESCE(SUM(unique_sessions), 0),
-			COALESCE(SUM(page_views), 0),
-			CASE WHEN SUM(unique_visitors) > 0
-				THEN LEAST(ROUND(
-					SUM(CASE WHEN unique_visitors > 0 THEN order_count ELSE 0 END)::numeric
-					/ SUM(unique_visitors) * 100, 2), 100)
 				ELSE 0 END
 		FROM gold.dashboard_kpi
 		WHERE shop_id = $1 AND day >= $2::date AND day < $3::date
-	`, shopID, start, end).Scan(
-		&kpi.TotalRevenueCents, &kpi.TotalOrders, &kpi.AvgOrderCents,
-		&kpi.UniqueVisitors, &kpi.UniqueSessions, &kpi.PageViews,
-		&kpi.ConversionRate,
-	)
+	`, shopID, start, end).Scan(&kpi.TotalRevenueCents, &kpi.TotalOrders, &kpi.AvgOrderCents)
 	return kpi, err
 }
 
