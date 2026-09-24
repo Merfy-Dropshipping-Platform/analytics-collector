@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/merfy/analytics-collector/internal/geo"
 )
@@ -20,14 +21,20 @@ func (c *capturePublisher) Publish(_ context.Context, body []byte) error {
 	return nil
 }
 
-const geoBatchBody = `{
+// geoBatchBody builds the request body fresh on every call — ServeHTTP rejects events whose
+// timestamp is older than 24h, so a hardcoded literal would silently go stale and start
+// failing every test that uses it regardless of what they actually check.
+func geoBatchBody() string {
+	ts := time.Now().UTC().Format(time.RFC3339)
+	return `{
   "shop_id": "shopHP",
   "tenant_id": "tenant-XYZ",
   "events": [
-    {"type":"page_view","session_id":"s1","page_url":"/p","timestamp":"2026-07-14T10:00:00Z"},
-    {"type":"purchase","session_id":"s1","order_id":"o9","product_price":1234,"order_total":5678,"timestamp":"2026-07-14T10:01:00Z"}
+    {"type":"page_view","session_id":"s1","page_url":"/p","timestamp":"` + ts + `"},
+    {"type":"purchase","session_id":"s1","order_id":"o9","product_price":1234,"order_total":5678,"timestamp":"` + ts + `"}
   ]
 }`
+}
 
 // realClientIP is a public IP we set as r.RemoteAddr — it must NEVER appear in the published
 // payload (152-ФЗ), whether geo resolves or not.
@@ -35,7 +42,7 @@ const realClientIP = "203.0.113.7"
 
 func postCollect(t *testing.T, h *CollectHandler, remoteAddr string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest("POST", "/collect", strings.NewReader(geoBatchBody))
+	req := httptest.NewRequest("POST", "/collect", strings.NewReader(geoBatchBody()))
 	req.RemoteAddr = remoteAddr
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

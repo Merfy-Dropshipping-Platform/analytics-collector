@@ -36,6 +36,77 @@
     }) + Date.now().toString(36);
   }
 
+  // --- Метка владельца (?mfy_owner=1 / =0) ----------------------------------
+  // Свой заход магазина не должен искажать статистику. Три канала хранения:
+  //   1. ownerFlagThisLoad — переменная в памяти, живёт РОВНО одну загрузку
+  //      страницы (обнуляется при следующей перезагрузке скрипта). Не зависит
+  //      ни от каких браузерных хранилищ — работает, даже если И localStorage,
+  //      И cookie недоступны одновременно (отключены куки + приватный режим).
+  //      Только что разобранный из адреса ?mfy_owner=1 обязан пометить события
+  //      ЭТОЙ страницы как internal независимо от того, удалось ли его сохранить.
+  //   2. localStorage — переживает переход на другую страницу и закрытие вкладки.
+  //   3. cookie (365 дней) — резервный канал: что-то одно из 2 и 3 может быть
+  //      недоступно (приватный режим Safari блокирует localStorage), поэтому
+  //      каждое обращение — в своём try/catch, а ошибка не должна ронять
+  //      остальной трекер и не должна мешать событиям уходить.
+  var OWNER_KEY = '_mfy_owner';
+  var ownerFlagThisLoad = false;
+
+  function readOwnerFlag() {
+    if (ownerFlagThisLoad) return true;
+    try {
+      if (window.localStorage && localStorage.getItem(OWNER_KEY) === '1') return true;
+    } catch (e) {}
+    try {
+      if (getCookie(OWNER_KEY) === '1') return true;
+    } catch (e) {}
+    return false;
+  }
+
+  function setOwnerFlag() {
+    ownerFlagThisLoad = true;
+    try { if (window.localStorage) localStorage.setItem(OWNER_KEY, '1'); } catch (e) {}
+    try { setCookie(OWNER_KEY, '1', 365); } catch (e) {}
+  }
+
+  function clearOwnerFlag() {
+    ownerFlagThisLoad = false;
+    try { if (window.localStorage) localStorage.removeItem(OWNER_KEY); } catch (e) {}
+    try { setCookie(OWNER_KEY, '', -1); } catch (e) {}
+  }
+
+  // Разбираем ?mfy_owner=1|0 и сразу убираем параметр из адреса; остальные
+  // параметры и # не трогаем. history.replaceState — чтобы не перезагружать
+  // страницу и не плодить лишнюю запись в истории браузера.
+  (function applyOwnerParam() {
+    var m = location.search.match(/[?&]mfy_owner=([^&]*)/);
+    if (!m) return;
+    if (m[1] === '1') setOwnerFlag();
+    if (m[1] === '0') clearOwnerFlag();
+
+    var rest = location.search
+      .replace(/([?&])mfy_owner=[^&]*/g, '$1')
+      .replace(/^[?&]+/, '')
+      .replace(/&+/g, '&')
+      .replace(/&$/, '');
+    var newUrl = location.pathname + (rest ? '?' + rest : '') + location.hash;
+    try {
+      // history.state, а не null: витрины на Astro держат состояние клиентского
+      // роутера в history.state (переходы назад/вперёд); затирание в null ломает
+      // навигацию по истории после самого первого захода с ?mfy_owner в адресе.
+      history.replaceState(history.state, '', newUrl);
+    } catch (e) {}
+  })();
+
+  // Пометка на КАЖДОЕ событие (правило 4 README, раздел «Пометка трафика»): бот важнее метки
+  // владельца — если тестируем автоматизацией под своим браузером, это всё
+  // равно бот. Пусто — обычный посетитель, поле traffic вовсе не ставится.
+  function currentTraffic() {
+    if (navigator.webdriver === true) return 'bot';
+    if (readOwnerFlag()) return 'internal';
+    return '';
+  }
+
   var visitorId = getCookie(VISITOR_KEY);
   if (!visitorId) {
     visitorId = 'vis_' + uid();
@@ -77,6 +148,8 @@
     if (utm.utm_source) evt.utm_source = utm.utm_source;
     if (utm.utm_medium) evt.utm_medium = utm.utm_medium;
     if (utm.utm_campaign) evt.utm_campaign = utm.utm_campaign;
+    var traffic = currentTraffic();
+    if (traffic) evt.traffic = traffic;
     if (extra) {
       for (var k in extra) {
         if (extra.hasOwnProperty(k)) evt[k] = extra[k];
