@@ -108,14 +108,14 @@ func HandleTraffic(ctx context.Context, pool *pgxpool.Pool, payload json.RawMess
 		}
 	}
 
-	// Top pages (from bronze for page_url detail)
+	// Top pages (from bronze for page_url detail) — только люди, окно по времени события.
 	pageRows, err := pool.Query(ctx, `
-		SELECT page_url, COUNT(*) AS views, COUNT(DISTINCT visitor_id) AS unique_visitors
-		FROM bronze.events
-		WHERE shop_id = $1 AND event_type = 'page_view'
-			AND created_at >= $2 AND created_at < $3
-			AND page_url IS NOT NULL
-		GROUP BY page_url
+		SELECT e.page_url, COUNT(*) AS views, COUNT(DISTINCT e.visitor_id) AS unique_visitors
+		FROM bronze.events e
+		WHERE e.shop_id = $1 AND e.event_type = 'page_view'
+			AND `+humanOnly("e")+` AND `+eventWindow("e", "$2", "$3")+`
+			AND e.page_url IS NOT NULL
+		GROUP BY e.page_url
 		ORDER BY views DESC
 		LIMIT 10
 	`, req.ShopID, start, end)
@@ -133,13 +133,13 @@ func HandleTraffic(ctx context.Context, pool *pgxpool.Pool, payload json.RawMess
 		topPages = append(topPages, p)
 	}
 
-	// Top referrers (from bronze)
+	// Top referrers (from bronze) — только люди, окно по времени события.
 	refRows, err := pool.Query(ctx, `
-		SELECT COALESCE(referrer, 'direct') AS ref, COUNT(DISTINCT session_id) AS sessions
-		FROM bronze.events
-		WHERE shop_id = $1 AND event_type IN ('session_start', 'page_view')
-			AND created_at >= $2 AND created_at < $3
-		GROUP BY COALESCE(referrer, 'direct')
+		SELECT COALESCE(e.referrer, 'direct') AS ref, COUNT(DISTINCT e.session_id) AS sessions
+		FROM bronze.events e
+		WHERE e.shop_id = $1 AND e.event_type IN ('session_start', 'page_view')
+			AND `+humanOnly("e")+` AND `+eventWindow("e", "$2", "$3")+`
+		GROUP BY COALESCE(e.referrer, 'direct')
 		ORDER BY sessions DESC
 		LIMIT 10
 	`, req.ShopID, start, end)

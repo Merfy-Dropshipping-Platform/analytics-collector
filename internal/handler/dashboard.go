@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/merfy/analytics-collector/internal/db"
 )
 
 type DashboardRequest struct {
@@ -52,7 +53,7 @@ func HandleDashboard(ctx context.Context, pool *pgxpool.Pool, payload json.RawMe
 		return nil, fmt.Errorf("shopId and period are required")
 	}
 
-	now := time.Now().UTC()
+	now := timeNow()
 	start, end := resolveRange(req.Period, req.From, req.To, now)
 	prevStart, prevEnd := resolveRange(req.Period, "", "", start.Add(-time.Second))
 
@@ -70,12 +71,12 @@ func HandleDashboard(ctx context.Context, pool *pgxpool.Pool, payload json.RawMe
 
 	// Time series.
 	// Intraday (12 two-hour buckets, read LIVE from bronze.events) when the resolved window is a
-	// single day AND that day is still within bronze retention (~30 days). This covers both the
-	// "24h" preset and a custom single calendar date (from==to), which resolve to the same 24h
-	// window. Older single days fall back to the daily gold path (gold.dashboard_kpi retains
-	// 13 months); reading bronze for them would return empty buckets and silently drop data.
+	// single day AND that day is still within bronze retention. This covers both the "24h" preset
+	// and a custom single calendar date (from==to), which resolve to the same 24h window.
+	// Сырые события хранятся db.RetentionMonths (13) месяцев — столько же видит gold.dashboard_kpi,
+	// так что день старше срока пуст в обоих источниках; проверка лишь не читает bronze зря.
 	singleDay := end.Sub(start) == 24*time.Hour
-	withinBronzeRetention := !start.Before(now.AddDate(0, 0, -30))
+	withinBronzeRetention := !start.Before(now.AddDate(0, -db.RetentionMonths, 0))
 
 	var ts []DashboardTimeSeries
 	if singleDay && withinBronzeRetention {
@@ -170,12 +171,14 @@ func queryTimeSeries(ctx context.Context, pool *pgxpool.Pool, shopID string, sta
 // queryIntradayBuckets reads 2-hour UTC buckets LIVE from bronze.events for the
 // given [start, end) window. Buckets are keyed by floor(epoch/7200) so they
 // align with the loop in buildIntradayBuckets. Used only for the "24h" period.
+// Отрезок — по времени события (event_timestamp), а не записи в базу; трафик — только люди,
+// деньги — все (как в представлениях миграции 017).
 func queryIntradayBuckets(ctx context.Context, pool *pgxpool.Pool, shopID string, start, end time.Time) (map[int64]DashboardTimeSeries, error) {
 	rows, err := pool.Query(ctx, `
 		WITH deduped_orders AS (
-			SELECT (floor(extract(epoch from e.created_at)/7200))::bigint AS bucket_idx, e.order_id, e.event_type, MAX(e.order_total_cents) AS order_total_cents
+			SELECT (floor(extract(epoch from e.event_timestamp)/7200))::bigint AS bucket_idx, e.order_id, e.event_type, MAX(e.order_total_cents) AS order_total_cents
 			FROM bronze.events e
-			WHERE e.shop_id=$1 AND e.created_at >= $2 AND e.created_at < $3 AND e.event_type IN ('purchase','order_cancel') AND e.order_id IS NOT NULL
+			WHERE e.shop_id=$1 AND `+eventWindow("e", "$2", "$3")+` AND e.event_type IN ('purchase','order_cancel') AND e.order_id IS NOT NULL
 			  -- Orphan guard (mirrors migration 014): subtract an order_cancel only when a paired
 			  -- purchase exists for the same (shop_id, order_id). The EXISTS subquery scans bronze
 			  -- WITHOUT the [start,end) window — the paired purchase may be on an earlier day.
@@ -192,11 +195,11 @@ func queryIntradayBuckets(ctx context.Context, pool *pgxpool.Pool, shopID string
 			FROM deduped_orders GROUP BY bucket_idx
 		),
 		traffic AS (
-			SELECT (floor(extract(epoch from created_at)/7200))::bigint AS bucket_idx,
-				COUNT(*) FILTER (WHERE event_type='page_view') AS page_views,
-				COUNT(DISTINCT session_id) FILTER (WHERE event_type IN ('page_view','session_start')) AS unique_sessions,
-				COUNT(DISTINCT visitor_id) AS unique_visitors
-			FROM bronze.events WHERE shop_id=$1 AND created_at >= $2 AND created_at < $3 GROUP BY 1
+			SELECT (floor(extract(epoch from e.event_timestamp)/7200))::bigint AS bucket_idx,
+				COUNT(*) FILTER (WHERE e.event_type='page_view') AS page_views,
+				COUNT(DISTINCT e.session_id) FILTER (WHERE e.event_type IN ('page_view','session_start')) AS unique_sessions,
+				COUNT(DISTINCT e.visitor_id) AS unique_visitors
+			FROM bronze.events e WHERE e.shop_id=$1 AND `+humanOnly("e")+` AND `+eventWindow("e", "$2", "$3")+` GROUP BY 1
 		)
 		SELECT COALESCE(t.bucket_idx,o.bucket_idx) AS bucket_idx, COALESCE(o.total_revenue_cents,0), COALESCE(o.order_count,0), COALESCE(t.unique_visitors,0), COALESCE(t.unique_sessions,0), COALESCE(t.page_views,0)
 		FROM traffic t FULL OUTER JOIN orders o ON t.bucket_idx = o.bucket_idx

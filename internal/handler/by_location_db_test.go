@@ -4,138 +4,91 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
-	"os"
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Integration test for the real by_location handler against a seeded Postgres.
-// Gated behind the `dbtest` build tag and GEO_TEST_DB (a DATABASE_URL). Run:
-//
-//	GEO_TEST_DB=postgres://... go test -tags dbtest -run TestByLocationHandler_DB ./internal/handler/
+// «Сессии по локациям» на настоящей базе (данные кладёт сам тест, запуск — см. main_db_test.go):
+// визиты — только люди, гео визита — по его событиям; заказ — в гео визита покупки, заказ без
+// визита человека (сервис заказов, робот) — в «Не определено»; деньги — все.
 func TestByLocationHandler_DB(t *testing.T) {
-	dsn := os.Getenv("GEO_TEST_DB")
-	if dsn == "" {
-		t.Skip("GEO_TEST_DB not set")
+	setClock(t, testNow())
+	const shop = "shopA"
+	geo := func(e ev, country, subject, city string) ev {
+		e.country, e.subject, e.city = country, subject, city
+		return e
 	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer pool.Close()
+	seed(t,
+		geo(pageView(shop, "l-m1", "l-v1", utc(-1, 10, 0)), "RU", "Москва", "Москва"),
+		geo(pageView(shop, "l-m2", "l-v2", utc(-1, 10, 30)), "RU", "Москва", "Москва"),
+		geo(pageView(shop, "l-p1", "l-v3", utc(-1, 11, 0)), "RU", "Санкт-Петербург", "Санкт-Петербург"),
+		geo(pageView(shop, "l-k1", "l-v4", utc(-1, 12, 0)), "RU", SubjCrimeaLabel, "Симферополь"),
+		pageView(shop, "l-n1", "l-v5", utc(-1, 13, 0)), // гео не определилось
+		// робот и свои в гео не попадают
+		geo(ev{shop: shop, session: "l-b1", visitor: "l-vb", typ: "page_view", page: "/", at: utc(-1, 14, 0), traffic: "bot"}, "RU", "Москва", "Москва"),
+		geo(ev{shop: shop, session: "l-i1", visitor: "l-vi", typ: "page_view", page: "/", at: utc(-1, 15, 0), traffic: "internal"}, "NL", "Limburg", "Eygelshoven"),
+		// покупка из визита в Москве
+		ev{shop: shop, session: "l-m1", visitor: "l-v1", typ: "purchase", at: utc(-1, 10, 20), order: "l-o1", total: 100},
+		// покупка от сервиса заказов: у события гео — IP сервера, его не берём → «Не определено»
+		geo(ev{shop: shop, session: "order-l-o2", visitor: "server-l-o2", typ: "purchase", at: utc(-1, 16, 0), order: "l-o2", total: 200}, "DE", "Hessen", "Frankfurt"),
+	)
 
-	// Global, default level (subject), period 24h → the seeded shopA data.
-	payload := json.RawMessage(`{"period":"24h"}`)
-	out, err := HandleGlobalByLocation(ctx, pool, payload)
-	if err != nil {
-		t.Fatalf("HandleGlobalByLocation: %v", err)
+	resp := call[ByLocationResponse](t, HandleGlobalByLocation, `{"period":"30d"}`)
+	if resp.TotalSessions != 5 {
+		t.Errorf("total_sessions = %d; want 5", resp.TotalSessions)
 	}
-	resp, ok := out.(ByLocationResponse)
-	if !ok {
-		t.Fatalf("unexpected response type %T", out)
+	want := map[string]struct{ sessions, orders int64 }{
+		"Москва":          {2, 1},
+		"Санкт-Петербург": {1, 0},
+		SubjCrimeaLabel:   {1, 0},
+		"":                {1, 1}, // «Не определено»: визит без гео + заказ сервиса
 	}
-
-	if resp.TotalSessions != 4 {
-		t.Errorf("total_sessions = %d; want 4", resp.TotalSessions)
-	}
-	if len(resp.Rows) != 4 {
-		t.Fatalf("rows = %d; want 4", len(resp.Rows))
-	}
-	// Sorted by sessions DESC (all 1 here) — assert content by subject.
-	bySubject := map[string]LocationRow{}
 	var shareSum float64
-	var sawNull, sawCrimea, sawMoscow bool
 	for _, r := range resp.Rows {
-		bySubject[r.Subject] = r
 		shareSum += r.Share
-		if r.Country == "" && r.Subject == "" {
-			sawNull = true
-		}
-		if r.Subject == "Республика Крым" && r.Country == "RU" {
-			sawCrimea = true
-		}
-		if r.Subject == "Москва" {
-			sawMoscow = true
-			if r.Orders != 1 {
-				t.Errorf("Москва orders = %d; want 1 (session-geo attribution)", r.Orders)
-			}
-		}
-		// city must be empty at subject level
 		if r.City != "" {
-			t.Errorf("subject-level city = %q; want empty", r.City)
+			t.Errorf("уровень субъектов, а город %q", r.City)
 		}
+		w, ok := want[r.Subject]
+		if !ok {
+			t.Errorf("лишняя строка: %+v", r)
+			continue
+		}
+		if r.Sessions != w.sessions || r.Orders != w.orders {
+			t.Errorf("%q: визиты/заказы = %d/%d; want %d/%d", r.Subject, r.Sessions, r.Orders, w.sessions, w.orders)
+		}
+		delete(want, r.Subject)
 	}
-	if !sawNull {
-		t.Error("NULL-geo bucket missing from rows")
-	}
-	if !sawCrimea {
-		t.Error("Республика Крым (override) bucket missing")
-	}
-	if !sawMoscow {
-		t.Error("Москва bucket missing")
-	}
-	// СПб had purchase o2 fully cancelled (dup cancel) → net 0.
-	if spb, ok := bySubject["Санкт-Петербург"]; ok && spb.Orders != 0 {
-		t.Errorf("СПб orders = %d; want 0 (purchase o2 cancelled, dup not double-counted)", spb.Orders)
+	if len(want) != 0 {
+		t.Errorf("нет строк: %v", want)
 	}
 	if shareSum < 99.95 || shareSum > 100.05 {
 		t.Errorf("sum(share) = %v; want ≈100", shareSum)
 	}
-	// Each of 4 equal buckets → 25.
-	if m := bySubject["Москва"]; m.Share != 25.0 {
-		t.Errorf("Москва share = %v; want 25.0", m.Share)
-	}
 
-	// level=country collapses to one RU + one NULL bucket.
-	out, err = HandleGlobalByLocation(ctx, pool, json.RawMessage(`{"period":"24h","level":"country"}`))
-	if err != nil {
-		t.Fatalf("country level: %v", err)
-	}
-	cResp := out.(ByLocationResponse)
-	var ruSessions int64
-	for _, r := range cResp.Rows {
+	// Страны: RU и «не определено».
+	for _, r := range call[ByLocationResponse](t, HandleGlobalByLocation, `{"period":"30d","level":"country"}`).Rows {
 		if r.Subject != "" || r.City != "" {
-			t.Errorf("country level should blank subject/city, got %+v", r)
+			t.Errorf("уровень стран, а субъект/город заполнены: %+v", r)
 		}
-		if r.Country == "RU" {
-			ruSessions = r.Sessions
+		if r.Country == "RU" && r.Sessions != 4 {
+			t.Errorf("RU: визитов %d; want 4", r.Sessions)
 		}
-	}
-	if ruSessions != 3 { // СПб + Москва + Крым
-		t.Errorf("country-level RU sessions = %d; want 3", ruSessions)
 	}
 
-	// Empty period (far future) → rows [] (not nil) and total 0, no divide-by-zero.
-	out, err = HandleGlobalByLocation(ctx, pool, json.RawMessage(`{"period":"custom","from":"2000-01-01","to":"2000-01-02"}`))
-	if err != nil {
-		t.Fatalf("empty period: %v", err)
-	}
-	eResp := out.(ByLocationResponse)
-	if eResp.Rows == nil {
-		t.Error("empty rows should be [] not nil")
-	}
-	if len(eResp.Rows) != 0 || eResp.TotalSessions != 0 {
-		t.Errorf("empty period: rows=%d total=%d; want 0/0", len(eResp.Rows), eResp.TotalSessions)
+	// Пустой период → rows [] (не null), total 0.
+	eResp := call[ByLocationResponse](t, HandleGlobalByLocation, `{"period":"custom","from":"2000-01-01","to":"2000-01-02"}`)
+	if eResp.Rows == nil || len(eResp.Rows) != 0 || eResp.TotalSessions != 0 {
+		t.Errorf("пустой период: rows=%v total=%d; want []/0", eResp.Rows, eResp.TotalSessions)
 	}
 
-	// Per-shop handler must require shopId.
-	if _, err := HandleByLocation(ctx, pool, json.RawMessage(`{"period":"24h"}`)); err == nil {
-		t.Error("HandleByLocation without shopId should error")
+	// Магазинный вызов требует shopId и фильтрует по нему.
+	if _, err := HandleByLocation(context.Background(), needDB(t), []byte(`{"period":"30d"}`)); err == nil {
+		t.Error("HandleByLocation без shopId должен вернуть ошибку")
 	}
-	// Per-shop with shopId works.
-	out, err = HandleByLocation(ctx, pool, json.RawMessage(`{"period":"24h","shopId":"shopA"}`))
-	if err != nil {
-		t.Fatalf("per-shop: %v", err)
+	if got := call[ByLocationResponse](t, HandleByLocation, `{"period":"30d","shopId":"shopA"}`).TotalSessions; got != 5 {
+		t.Errorf("магазин: total_sessions = %d; want 5", got)
 	}
-	if out.(ByLocationResponse).TotalSessions != 4 {
-		t.Errorf("per-shop total_sessions = %d; want 4", out.(ByLocationResponse).TotalSessions)
-	}
-	// Per-shop for a different shop → empty.
-	out, _ = HandleByLocation(ctx, pool, json.RawMessage(`{"period":"24h","shopId":"nope"}`))
-	if out.(ByLocationResponse).TotalSessions != 0 {
-		t.Errorf("per-shop unknown shop total = %d; want 0", out.(ByLocationResponse).TotalSessions)
+	if got := call[ByLocationResponse](t, HandleByLocation, `{"period":"30d","shopId":"nope"}`).TotalSessions; got != 0 {
+		t.Errorf("чужой магазин: total_sessions = %d; want 0", got)
 	}
 }
