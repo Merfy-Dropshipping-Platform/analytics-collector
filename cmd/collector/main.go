@@ -100,6 +100,7 @@ func main() {
 
 	// Register RPC handlers
 	rpcSrv.Register("analytics.dashboard", handler.HandleDashboard)
+	rpcSrv.Register("analytics.traffic_hourly", handler.HandleHourlyTraffic)
 	rpcSrv.Register("analytics.traffic", handler.HandleTraffic)
 	rpcSrv.Register("analytics.revenue", handler.HandleRevenue)
 	rpcSrv.Register("analytics.funnel", handler.HandleFunnel)
