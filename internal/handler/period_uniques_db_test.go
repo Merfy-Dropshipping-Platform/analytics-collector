@@ -68,7 +68,8 @@ func TestRule1_UniqueOverWholePeriod_DB(t *testing.T) {
 			{"global", func(t *testing.T) FunnelResponse { return call[FunnelResponse](t, HandleGlobalFunnel, all30d) }},
 		} {
 			st := h.handler(t).Stages
-			want := map[string]int64{"visits": 2, "add_to_cart": 1, "purchases": 1}
+			// корзина накопительная (28.09): визит u-s2 с покупкой тоже дошёл до корзины
+			want := map[string]int64{"visits": 2, "add_to_cart": 2, "purchases": 1}
 			for name, n := range want {
 				if got := stage(t, st, name).Count; got != n {
 					t.Errorf("%s: шаг %s = %d; want %d", h.name, name, got, n)

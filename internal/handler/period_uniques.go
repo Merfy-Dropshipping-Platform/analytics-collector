@@ -76,17 +76,35 @@ func periodKPI(ctx context.Context, pool *pgxpool.Pool, shopID string, start, en
 }
 
 // periodFunnelSQL — шаги воронки за окно, визиты каждого шага — уникальные за всё окно.
+// Шаг накопительный (владелец 28.09): визит считается на каждом шаге до самого дальнего, до
+// которого дошёл, — оплативший визит есть и в «Добавлено в корзину», и в «Готов к оплате»,
+// даже если витрина не прислала события этих шагов (например, «Купить сейчас»). Шаги до
+// оплаты — только визиты людей (есть хоть одно событие человека), оплаты — все, как деньги.
 // Определения — как у silver.daily_funnel: шаги визита — только люди, покупки — все (это заказы).
 var periodFunnelSQL = `
+	WITH visit AS (
+		SELECT e.session_id,
+			BOOL_OR(` + humanOnly("e") + `) AS human,
+			MAX(CASE e.event_type
+				WHEN 'product_view' THEN 1
+				WHEN 'add_to_cart' THEN 2
+				WHEN 'checkout_start' THEN 3
+				WHEN 'purchase' THEN 4
+				ELSE 0
+			END) AS step,
+			BOOL_OR(e.event_type = 'purchase') AS purchased
+		FROM bronze.events e
+		WHERE ` + inShop + `
+		  AND e.session_id IS NOT NULL
+		  AND ` + eventWindow("e", "$1", "$2") + `
+		GROUP BY e.session_id
+	)
 	SELECT
-		COUNT(DISTINCT e.session_id) FILTER (WHERE e.event_type = 'product_view'),
-		COUNT(DISTINCT e.session_id) FILTER (WHERE e.event_type = 'add_to_cart'),
-		COUNT(DISTINCT e.session_id) FILTER (WHERE e.event_type = 'checkout_start'),
-		COUNT(DISTINCT e.session_id) FILTER (WHERE e.event_type = 'purchase')
-	FROM bronze.events e
-	WHERE ` + inShop + `
-	  AND (` + humanOnly("e") + ` OR e.event_type IN ('purchase', 'order_cancel'))
-	  AND ` + eventWindow("e", "$1", "$2")
+		COUNT(*) FILTER (WHERE human AND step >= 1),
+		COUNT(*) FILTER (WHERE human AND step >= 2),
+		COUNT(*) FILTER (WHERE human AND step >= 3),
+		COUNT(*) FILTER (WHERE purchased)
+	FROM visit`
 
 // funnelCounts — числа для шагов воронки: первый шаг — посетители (как «Посещаемость»).
 type funnelCounts struct {
