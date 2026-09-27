@@ -88,7 +88,8 @@ func TestTrafficTypes_OnlyHumansInTraffic_MoneyAll_DB(t *testing.T) {
 	})
 	t.Run("funnel", func(t *testing.T) {
 		st := call[FunnelResponse](t, HandleFunnel, payload).Stages
-		want := map[string]int64{"visits": 4, "add_to_cart": 1, "checkout_starts": 0, "purchases": 3}
+		// шаги до оплаты — только люди и накопительно (28.09): визит t-h1 с покупкой есть и в «Готов к оплате»
+		want := map[string]int64{"visits": 4, "add_to_cart": 1, "checkout_starts": 1, "purchases": 3}
 		for name, n := range want {
 			if got := stage(t, st, name).Count; got != n {
 				t.Errorf("шаг %s = %d; want %d", name, got, n)
