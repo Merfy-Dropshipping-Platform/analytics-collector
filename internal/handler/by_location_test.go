@@ -55,7 +55,7 @@ func TestByLocationResponse_WireKeys(t *testing.T) {
 
 // Empty rows must serialize as [] (not null) — a clean FE contract.
 func TestByLocationResponse_EmptyRowsNotNull(t *testing.T) {
-	data, err := json.Marshal(ByLocationResponse{Rows: []LocationRow{}, TotalSessions: 0})
+	data, err := json.Marshal(ByLocationResponse{Rows: []LocationRow{}, TotalPeople: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +98,8 @@ func TestGoldenSampleParsesAndShareSums(t *testing.T) {
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		t.Fatalf("golden does not match ByLocationResponse: %v", err)
 	}
-	if resp.TotalSessions != 200 {
-		t.Errorf("total_sessions = %d; want 200", resp.TotalSessions)
+	if resp.TotalPeople != 200 {
+		t.Errorf("total_sessions = %d; want 200", resp.TotalPeople)
 	}
 	if len(resp.Rows) != 4 {
 		t.Fatalf("rows = %d; want 4", len(resp.Rows))

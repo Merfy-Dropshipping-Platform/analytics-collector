@@ -130,14 +130,14 @@ func TestTrafficTypes_OnlyHumansInTraffic_MoneyAll_DB(t *testing.T) {
 	})
 	t.Run("by location", func(t *testing.T) {
 		r := call[ByLocationResponse](t, HandleByLocation, payload)
-		if r.TotalSessions != 4 {
-			t.Errorf("total_sessions = %d; want 4", r.TotalSessions)
+		if r.TotalPeople != 4 {
+			t.Errorf("total_sessions = %d; want 4", r.TotalPeople)
 		}
 		for _, row := range r.Rows {
 			if row.Country == "NL" {
 				t.Errorf("визиты своих попали в гео: %+v", row)
 			}
-			if row.Subject == "Москва" && (row.Sessions != 1 || row.Orders != 1) {
+			if row.Subject == "Москва" && (row.People != 1 || row.Orders != 1) {
 				t.Errorf("Москва: %+v; want 1 визит (робот не считается), 1 заказ", row)
 			}
 			if row.Country == "" && row.Orders != 2 {

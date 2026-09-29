@@ -8,8 +8,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// "Сессии по локациям" — READ-ONLY rollup over silver.daily_geo (per-triple counts are
-// disjoint and additive, so COUNT(DISTINCT session) rolls up by plain SUM; see migration 015).
+// «Сессии по локациям» — люди по месту первого визита за период (владелец 28.09: «люди в обеих»).
+// Единица и источник — те же, что у «Посещаемости»: посетители считаются из periodVisitsSQL
+// (period_uniques.go), каждый — один раз, в гео своего первого визита. Поэтому сумма людей по
+// локациям всегда равна unique_visitors дашборда за тот же период.
+//
+// Имена полей ответа (sessions, total_sessions) — прежние: это контракт шлюза и back-office
+// (by-location.dto.ts, kubb). Смысл — люди.
 //
 // Two RPC entrypoints share one implementation:
 //   - analytics.global.by_location  → HandleGlobalByLocation (all shops, no shop filter)
@@ -30,17 +35,17 @@ type GlobalByLocationRequest struct {
 }
 
 type LocationRow struct {
-	Country  string  `json:"country"`  // ISO-3166 alpha-2; "" → "Не определён" bucket
-	Subject  string  `json:"subject"`  // subject; annexed territories already normalized on ingest
-	City     string  `json:"city"`     // "" unless level=="city"
-	Sessions int64   `json:"sessions"` // COUNT(DISTINCT session_id) over the period
-	Orders   int64   `json:"orders"`   // net: purchase − order_cancel
-	Share    float64 `json:"share"`    // 0..100, 2 decimals, sessions/total_sessions*100
+	Country string  `json:"country"`  // ISO-3166 alpha-2; "" → "Не определён" bucket
+	Subject string  `json:"subject"`  // subject; annexed territories already normalized on ingest
+	City    string  `json:"city"`     // "" unless level=="city"
+	People  int64   `json:"sessions"` // люди, чей первый визит за период — в этой локации
+	Orders  int64   `json:"orders"`   // net: purchase − order_cancel
+	Share   float64 `json:"share"`    // 0..100, 2 decimals, people/total*100
 }
 
 type ByLocationResponse struct {
-	Rows          []LocationRow `json:"rows"`           // init []LocationRow{} → "rows":[] never null
-	TotalSessions int64         `json:"total_sessions"` // denominator of share; 0 → rows empty
+	Rows        []LocationRow `json:"rows"`           // init []LocationRow{} → "rows":[] never null
+	TotalPeople int64         `json:"total_sessions"` // все люди за период = unique_visitors; делитель долей
 }
 
 // HandleGlobalByLocation answers the platform-wide widget (SuperAdmin): no shop filter.
@@ -93,7 +98,7 @@ func handleByLocation(ctx context.Context, pool *pgxpool.Pool, payload json.RawM
 		shopFilter = req.ShopID
 	}
 
-	// Правило 1: визит считается один раз за весь период, а не в каждом дне (period_uniques.go).
+	// Человек считается один раз за весь период (правило 1, period_uniques.go).
 	// total_sessions is the share denominator over ALL groups (unlimited), so shares of the
 	// (possibly limited) rows sum to ≤100 and reflect the true whole. Rows init empty (not nil)
 	// → serializes as "rows":[] for a clean FE contract.
@@ -103,16 +108,16 @@ func handleByLocation(ctx context.Context, pool *pgxpool.Pool, payload json.RawM
 	}
 
 	for i := range result {
-		result[i].Share = roundShare(result[i].Sessions, total)
+		result[i].Share = roundShare(result[i].People, total)
 	}
 
-	return ByLocationResponse{Rows: result, TotalSessions: total}, nil
+	return ByLocationResponse{Rows: result, TotalPeople: total}, nil
 }
 
-// roundShare returns sessions/total*100 rounded to 2 decimals; total==0 → 0 (no divide-by-zero).
-func roundShare(sessions, total int64) float64 {
+// roundShare returns part/total*100 rounded to 2 decimals; total==0 → 0 (no divide-by-zero).
+func roundShare(part, total int64) float64 {
 	if total <= 0 {
 		return 0
 	}
-	return float64(int64(float64(sessions)/float64(total)*10000+0.5)) / 100
+	return float64(int64(float64(part)/float64(total)*10000+0.5)) / 100
 }

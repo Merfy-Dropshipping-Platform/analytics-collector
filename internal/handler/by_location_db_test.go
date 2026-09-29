@@ -7,7 +7,8 @@ import (
 	"testing"
 )
 
-// «Сессии по локациям» на настоящей базе (данные кладёт сам тест, запуск — см. main_db_test.go):
+// «Сессии по локациям» на настоящей базе (данные кладёт сам тест, запуск — см. main_db_test.go),
+// с 28.09 — люди по первому визиту; здесь у каждого человека один визит:
 // визиты — только люди, гео визита — по его событиям; заказ — в гео визита покупки, заказ без
 // визита человека (сервис заказов, робот) — в «Не определено»; деньги — все.
 func TestByLocationHandler_DB(t *testing.T) {
@@ -33,8 +34,8 @@ func TestByLocationHandler_DB(t *testing.T) {
 	)
 
 	resp := call[ByLocationResponse](t, HandleGlobalByLocation, `{"period":"30d"}`)
-	if resp.TotalSessions != 5 {
-		t.Errorf("total_sessions = %d; want 5", resp.TotalSessions)
+	if resp.TotalPeople != 5 {
+		t.Errorf("total_sessions = %d; want 5", resp.TotalPeople)
 	}
 	want := map[string]struct{ sessions, orders int64 }{
 		"Москва":          {2, 1},
@@ -53,8 +54,8 @@ func TestByLocationHandler_DB(t *testing.T) {
 			t.Errorf("лишняя строка: %+v", r)
 			continue
 		}
-		if r.Sessions != w.sessions || r.Orders != w.orders {
-			t.Errorf("%q: визиты/заказы = %d/%d; want %d/%d", r.Subject, r.Sessions, r.Orders, w.sessions, w.orders)
+		if r.People != w.sessions || r.Orders != w.orders {
+			t.Errorf("%q: люди/заказы = %d/%d; want %d/%d", r.Subject, r.People, r.Orders, w.sessions, w.orders)
 		}
 		delete(want, r.Subject)
 	}
@@ -70,25 +71,25 @@ func TestByLocationHandler_DB(t *testing.T) {
 		if r.Subject != "" || r.City != "" {
 			t.Errorf("уровень стран, а субъект/город заполнены: %+v", r)
 		}
-		if r.Country == "RU" && r.Sessions != 4 {
-			t.Errorf("RU: визитов %d; want 4", r.Sessions)
+		if r.Country == "RU" && r.People != 4 {
+			t.Errorf("RU: людей %d; want 4", r.People)
 		}
 	}
 
 	// Пустой период → rows [] (не null), total 0.
 	eResp := call[ByLocationResponse](t, HandleGlobalByLocation, `{"period":"custom","from":"2000-01-01","to":"2000-01-02"}`)
-	if eResp.Rows == nil || len(eResp.Rows) != 0 || eResp.TotalSessions != 0 {
-		t.Errorf("пустой период: rows=%v total=%d; want []/0", eResp.Rows, eResp.TotalSessions)
+	if eResp.Rows == nil || len(eResp.Rows) != 0 || eResp.TotalPeople != 0 {
+		t.Errorf("пустой период: rows=%v total=%d; want []/0", eResp.Rows, eResp.TotalPeople)
 	}
 
 	// Магазинный вызов требует shopId и фильтрует по нему.
 	if _, err := HandleByLocation(context.Background(), needDB(t), []byte(`{"period":"30d"}`)); err == nil {
 		t.Error("HandleByLocation без shopId должен вернуть ошибку")
 	}
-	if got := call[ByLocationResponse](t, HandleByLocation, `{"period":"30d","shopId":"shopA"}`).TotalSessions; got != 5 {
+	if got := call[ByLocationResponse](t, HandleByLocation, `{"period":"30d","shopId":"shopA"}`).TotalPeople; got != 5 {
 		t.Errorf("магазин: total_sessions = %d; want 5", got)
 	}
-	if got := call[ByLocationResponse](t, HandleByLocation, `{"period":"30d","shopId":"nope"}`).TotalSessions; got != 0 {
+	if got := call[ByLocationResponse](t, HandleByLocation, `{"period":"30d","shopId":"nope"}`).TotalPeople; got != 0 {
 		t.Errorf("чужой магазин: total_sessions = %d; want 0", got)
 	}
 }
