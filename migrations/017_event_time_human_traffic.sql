@@ -33,7 +33,8 @@ DROP MATERIALIZED VIEW IF EXISTS silver.daily_geo CASCADE;
 
 
 -- Трафик за день: просмотры, визиты, посетители, новые сессии — только люди.
--- Формулы — из 012.
+-- Формулы — из 012. Посетители — по тем же событиям визита, что и визиты (28.09): покупка от
+-- сервиса заказов без визита браузера (visitor_id "server-…") посетителем не считается.
 CREATE MATERIALIZED VIEW silver.daily_traffic AS
 SELECT
     shop_id,
@@ -41,7 +42,7 @@ SELECT
     date_trunc('day', event_timestamp)::date AS day,
     COUNT(*) FILTER (WHERE event_type = 'page_view') AS page_views,
     COUNT(DISTINCT session_id) FILTER (WHERE event_type IN ('page_view', 'session_start')) AS unique_sessions,
-    COUNT(DISTINCT visitor_id) AS unique_visitors,
+    COUNT(DISTINCT visitor_id) FILTER (WHERE event_type IN ('page_view', 'session_start')) AS unique_visitors,
     COUNT(*) FILTER (WHERE event_type = 'session_start') AS new_sessions
 FROM bronze.events
 WHERE traffic_type = 'human'

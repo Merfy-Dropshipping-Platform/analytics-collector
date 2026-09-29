@@ -52,7 +52,7 @@ var hourlyTrafficSQL = `
 	SELECT floor((extract(epoch from e.event_timestamp) - extract(epoch from $1::timestamptz)) / 3600)::int,
 		COUNT(DISTINCT e.visitor_id)
 	FROM bronze.events e
-	WHERE e.shop_id = $3 AND ` + humanOnly("e") + ` AND ` + eventWindow("e", "$1", "$2") + `
+	WHERE e.shop_id = $3 AND ` + humanOnly("e") + ` AND ` + visitEvent("e") + ` AND ` + eventWindow("e", "$1", "$2") + `
 	GROUP BY 1`
 
 func HandleHourlyTraffic(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessage) (any, error) {

@@ -194,8 +194,8 @@ func queryIntradayBuckets(ctx context.Context, pool *pgxpool.Pool, shopID string
 		traffic AS (
 			SELECT (floor(extract(epoch from e.event_timestamp)/7200))::bigint AS bucket_idx,
 				COUNT(*) FILTER (WHERE e.event_type='page_view') AS page_views,
-				COUNT(DISTINCT e.session_id) FILTER (WHERE e.event_type IN ('page_view','session_start')) AS unique_sessions,
-				COUNT(DISTINCT e.visitor_id) AS unique_visitors
+				COUNT(DISTINCT e.session_id) FILTER (WHERE `+visitEvent("e")+`) AS unique_sessions,
+				COUNT(DISTINCT e.visitor_id) FILTER (WHERE `+visitEvent("e")+`) AS unique_visitors
 			FROM bronze.events e WHERE e.shop_id=$1 AND `+humanOnly("e")+` AND `+eventWindow("e", "$2", "$3")+` GROUP BY 1
 		)
 		SELECT COALESCE(t.bucket_idx,o.bucket_idx) AS bucket_idx, COALESCE(o.total_revenue_cents,0), COALESCE(o.order_count,0), COALESCE(t.unique_visitors,0), COALESCE(t.unique_sessions,0), COALESCE(t.page_views,0)

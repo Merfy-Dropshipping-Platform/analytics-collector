@@ -12,6 +12,19 @@ func humanOnly(alias string) string {
 	return alias + ".traffic_type = 'human'"
 }
 
+// visitEventTypes — события визита: просмотр страницы и начало сессии (012). Посетитель — тот, у кого
+// был визит: посетители и визиты считаются по одним и тем же событиям, поэтому посетителей не бывает
+// больше, чем визитов. Покупку шлёт и сервис заказов — без визита браузера (visitor_id "server-…",
+// session_id "order-…", пометка human: подпись сервера не проверяется, это деньги). Без этого условия
+// каждая такая покупка становилась «посетителем» без визита (MrMerfy 28.09: 9 из 25 «чел.»).
+// Тот же список — литералом в silver.daily_traffic (миграция 017).
+const visitEventTypes = "('page_view', 'session_start')"
+
+// visitEvent — событие визита: из таких событий считаются и посетители, и визиты.
+func visitEvent(alias string) string {
+	return alias + ".event_type IN " + visitEventTypes
+}
+
 // Запас для условий на created_at. Они ничего не отбирают по смыслу — только отсекают партиции
 // bronze, нарезанные по времени записи (created_at), а не события.
 const (

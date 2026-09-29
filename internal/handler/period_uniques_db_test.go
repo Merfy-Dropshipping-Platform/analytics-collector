@@ -85,12 +85,12 @@ func TestRule1_UniqueOverWholePeriod_DB(t *testing.T) {
 	})
 	t.Run("by location", func(t *testing.T) {
 		for _, payload := range []string{shop30d, all30d} {
-			if got := call[ByLocationResponse](t, HandleGlobalByLocation, payload).TotalSessions; got != 4 {
-				t.Errorf("%s: total_sessions = %d; want 4 (визит через полночь — один)", payload, got)
+			if got := call[ByLocationResponse](t, HandleGlobalByLocation, payload).TotalPeople; got != 2 {
+				t.Errorf("%s: людей по локациям = %d; want 2 (люди, как посетители выше)", payload, got)
 			}
 		}
-		if got := call[ByLocationResponse](t, HandleByLocation, shop30d).TotalSessions; got != 4 {
-			t.Errorf("магазин: total_sessions = %d; want 4", got)
+		if got := call[ByLocationResponse](t, HandleByLocation, shop30d).TotalPeople; got != 2 {
+			t.Errorf("магазин: людей по локациям = %d; want 2", got)
 		}
 	})
 }
