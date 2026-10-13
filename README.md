@@ -52,6 +52,16 @@
 `migrations/`); этот кусок только проставляет и пишет колонку. До выкатки P2
 колонка в базе есть, но ни один отчёт её ещё не читает.
 
+## Событие пересборки при правке счётчиков (блок 11 «Каркаса витрины»)
+
+После успешных `analytics.pixels.create`, `analytics.pixels.update` и `analytics.pixels.delete` сервис публикует в точку
+обмена `content.events` (topic, durable; её же объявляет сборщик витрин site-gen) событие с ключом
+`analytics-counters-change`: `{ "v": 1, "type": "analytics-counters-change", "siteId": "<shop_id>", "eventAt": "<UTC>",
+"source": "analytics-collector" }`. Сборщик витрин пересобирает магазин новой темы — номера счётчиков вписываются в его
+конфиг; магазины нынешних тем событие не задевает. Не ушло — строка `counters event: publish failed` в журнале, ответ
+кабинету тот же. Код — `internal/handler/counters_event.go`. Договор на настоящем брокере — `go test -tags amqptest
+./internal/rabbitmq/` с `AMQP_TEST_URL`.
+
 ## Тесты с базой на чистой БД: нужна партиция текущего месяца
 
 `bronze.events` — партиционированная таблица (`migrations/002_bronze_events.sql`,

@@ -115,9 +115,13 @@ func main() {
 	rpcSrv.Register("analytics.global.by_location", handler.HandleGlobalByLocation)
 	rpcSrv.Register("analytics.by_location", handler.HandleByLocation) // per-shop (фаза 6)
 	rpcSrv.Register("analytics.pixels.list", handler.HandlePixelsList)
-	rpcSrv.Register("analytics.pixels.create", handler.HandlePixelsCreate)
-	rpcSrv.Register("analytics.pixels.update", handler.HandlePixelsUpdate)
-	rpcSrv.Register("analytics.pixels.delete", handler.HandlePixelsDelete)
+	// Правка счётчиков пересобирает магазин новой темы (блок 11 «Каркаса витрины», С11-4 Б): событие в content.events.
+	countersEvent := func(next rpc.Handler) rpc.Handler {
+		return handler.WithCountersEvent(pub, handler.FindPixelShop, time.Now, next)
+	}
+	rpcSrv.Register("analytics.pixels.create", countersEvent(handler.HandlePixelsCreate))
+	rpcSrv.Register("analytics.pixels.update", countersEvent(handler.HandlePixelsUpdate))
+	rpcSrv.Register("analytics.pixels.delete", countersEvent(handler.HandlePixelsDelete))
 
 	if err := rpcSrv.Start(ctx); err != nil {
 		slog.Error("start rpc server", "error", err)
