@@ -92,6 +92,8 @@ type Pixel struct {
 	Name      string    `json:"name"`
 	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
+	// Отметка «своего кода» (блок 13 «Секций и SDK», часть 13в): required — после «Принять», none — сразу.
+	Consent string `json:"consent"`
 }
 
 type PixelListRequest struct {
@@ -105,14 +107,16 @@ type PixelCreateRequest struct {
 	PixelType string `json:"pixel_type"`
 	PixelID   string `json:"pixel_id"`
 	Name      string `json:"name"`
+	Consent   string `json:"consent,omitempty"`
 }
 
 type PixelUpdateRequest struct {
-	ID       string `json:"id"`
-	TenantID string `json:"tenantId"`
-	IsActive *bool  `json:"is_active,omitempty"`
+	ID       string  `json:"id"`
+	TenantID string  `json:"tenantId"`
+	IsActive *bool   `json:"is_active,omitempty"`
 	Name     *string `json:"name,omitempty"`
 	PixelID  *string `json:"pixel_id,omitempty"`
+	Consent  *string `json:"consent,omitempty"`
 }
 
 type PixelDeleteRequest struct {
@@ -127,7 +131,7 @@ func HandlePixelsList(ctx context.Context, pool *pgxpool.Pool, payload json.RawM
 	}
 
 	rows, err := pool.Query(ctx, `
-		SELECT id, pixel_type, pixel_id, COALESCE(name, ''), is_active, created_at
+		SELECT id, pixel_type, pixel_id, COALESCE(name, ''), is_active, created_at, consent
 		FROM config.tracking_pixels
 		WHERE shop_id = $1 AND tenant_id = $2
 		ORDER BY created_at DESC
@@ -140,7 +144,7 @@ func HandlePixelsList(ctx context.Context, pool *pgxpool.Pool, payload json.RawM
 	pixels := make([]Pixel, 0)
 	for rows.Next() {
 		var p Pixel
-		if err := rows.Scan(&p.ID, &p.PixelType, &p.PixelID, &p.Name, &p.IsActive, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.PixelType, &p.PixelID, &p.Name, &p.IsActive, &p.CreatedAt, &p.Consent); err != nil {
 			return nil, err
 		}
 		pixels = append(pixels, p)
@@ -158,13 +162,18 @@ func HandlePixelsCreate(ctx context.Context, pool *pgxpool.Pool, payload json.Ra
 		return nil, fmt.Errorf("shopId, tenantId, pixel_type, pixel_id are required")
 	}
 
+	consent, err := consentOrDefault(req.Consent)
+	if err != nil {
+		return nil, err
+	}
+
 	var pixel Pixel
-	err := pool.QueryRow(ctx, `
-		INSERT INTO config.tracking_pixels (shop_id, tenant_id, pixel_type, pixel_id, name)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, pixel_type, pixel_id, COALESCE(name, ''), is_active, created_at
-	`, req.ShopID, req.TenantID, req.PixelType, req.PixelID, req.Name).Scan(
-		&pixel.ID, &pixel.PixelType, &pixel.PixelID, &pixel.Name, &pixel.IsActive, &pixel.CreatedAt,
+	err = pool.QueryRow(ctx, `
+		INSERT INTO config.tracking_pixels (shop_id, tenant_id, pixel_type, pixel_id, name, consent)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, pixel_type, pixel_id, COALESCE(name, ''), is_active, created_at, consent
+	`, req.ShopID, req.TenantID, req.PixelType, req.PixelID, req.Name, consent).Scan(
+		&pixel.ID, &pixel.PixelType, &pixel.PixelID, &pixel.Name, &pixel.IsActive, &pixel.CreatedAt, &pixel.Consent,
 	)
 	if err != nil {
 		return nil, err
@@ -180,6 +189,10 @@ func HandlePixelsUpdate(ctx context.Context, pool *pgxpool.Pool, payload json.Ra
 	}
 	if req.ID == "" || req.TenantID == "" {
 		return nil, fmt.Errorf("id and tenantId are required")
+	}
+	// Отметка проверяется до первой правки: неверная отметка не меняет и других полей (часть 13в).
+	if req.Consent != nil && !consentValues[*req.Consent] {
+		return nil, fmt.Errorf("consent: нужно required или none")
 	}
 
 	// Build dynamic update
@@ -207,13 +220,21 @@ func HandlePixelsUpdate(ctx context.Context, pool *pgxpool.Pool, payload json.Ra
 			return nil, err
 		}
 	}
+	if req.Consent != nil {
+		_, err := pool.Exec(ctx,
+			"UPDATE config.tracking_pixels SET consent = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3",
+			*req.Consent, req.ID, req.TenantID)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	var pixel Pixel
 	err := pool.QueryRow(ctx, `
-		SELECT id, pixel_type, pixel_id, COALESCE(name, ''), is_active, created_at
+		SELECT id, pixel_type, pixel_id, COALESCE(name, ''), is_active, created_at, consent
 		FROM config.tracking_pixels WHERE id = $1 AND tenant_id = $2
 	`, req.ID, req.TenantID).Scan(
-		&pixel.ID, &pixel.PixelType, &pixel.PixelID, &pixel.Name, &pixel.IsActive, &pixel.CreatedAt,
+		&pixel.ID, &pixel.PixelType, &pixel.PixelID, &pixel.Name, &pixel.IsActive, &pixel.CreatedAt, &pixel.Consent,
 	)
 	if err != nil {
 		return nil, err
@@ -239,4 +260,18 @@ func HandlePixelsDelete(ctx context.Context, pool *pgxpool.Pool, payload json.Ra
 	}
 
 	return map[string]bool{"success": true}, nil
+}
+
+// Отметка «своего кода» (часть 13в): required — код ждёт «Принять» в баннере cookie, none — запускается сразу.
+var consentValues = map[string]bool{"required": true, "none": true}
+
+// consentOrDefault — отметка из запроса создания: нет — required, не из двух — ошибка.
+func consentOrDefault(consent string) (string, error) {
+	if consent == "" {
+		return "required", nil
+	}
+	if !consentValues[consent] {
+		return "", fmt.Errorf("consent: нужно required или none")
+	}
+	return consent, nil
 }

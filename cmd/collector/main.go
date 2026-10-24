@@ -165,6 +165,8 @@ func main() {
 	pixelsHTTPHandler := handler.NewPixelsHTTPHandler(pool)
 
 	r.Post("/collect", collectHandler.ServeHTTP)
+	// Отчёты CSP витрин новых тем (блок 13 «Секций и SDK», часть 13в): report-uri политики.
+	r.Post("/csp", handler.CSPHandler{Store: handler.PoolCSPStore{DB: pool}}.ServeHTTP)
 	r.Get("/health", healthHandler.ServeHTTP)
 	r.Get("/pixels", pixelsHTTPHandler.ServeHTTP)
 
