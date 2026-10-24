@@ -19,10 +19,10 @@ type TopProductsRequest struct {
 }
 
 type ProductEntry struct {
-	ProductID         string `json:"product_id"`
-	Name              string `json:"product_name"`
-	SalesCount        int64  `json:"total_sold"`
-	TotalRevenueCents int64  `json:"total_revenue_cents"`
+	ProductID        string `json:"product_id"`
+	Name             string `json:"product_name"`
+	SalesCount       int64  `json:"total_sold"`
+	TotalRevenueCents int64 `json:"total_revenue_cents"`
 }
 
 type TopProductsResponse struct {

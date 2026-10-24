@@ -18,18 +18,18 @@ type TrafficRequest struct {
 }
 
 type TrafficSummary struct {
-	TotalVisitors    int64   `json:"total_visitors"`
-	TotalSessions    int64   `json:"total_sessions"`
-	TotalPageViews   int64   `json:"total_page_views"`
-	AvgSessionDurSec int64   `json:"avg_session_duration_sec"`
-	BounceRate       float64 `json:"bounce_rate"`
+	TotalVisitors     int64   `json:"total_visitors"`
+	TotalSessions     int64   `json:"total_sessions"`
+	TotalPageViews    int64   `json:"total_page_views"`
+	AvgSessionDurSec  int64   `json:"avg_session_duration_sec"`
+	BounceRate        float64 `json:"bounce_rate"`
 }
 
 type TrafficTS struct {
-	Day       string `json:"day"`
-	Visitors  int64  `json:"visitors"`
-	Sessions  int64  `json:"sessions"`
-	PageViews int64  `json:"page_views"`
+	Day      string `json:"day"`
+	Visitors int64  `json:"visitors"`
+	Sessions int64  `json:"sessions"`
+	PageViews int64 `json:"page_views"`
 }
 
 type TopPage struct {

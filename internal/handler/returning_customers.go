@@ -18,9 +18,9 @@ type ReturningCustomersRequest struct {
 }
 
 type ReturningCustomersResponse struct {
-	TotalBuyers  int64   `json:"total_buyers"`
-	RepeatBuyers int64   `json:"repeat_buyers"`
-	RepeatRate   float64 `json:"repeat_rate"`
+	TotalBuyers   int64   `json:"total_buyers"`
+	RepeatBuyers  int64   `json:"repeat_buyers"`
+	RepeatRate    float64 `json:"repeat_rate"`
 }
 
 func HandleReturningCustomers(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessage) (any, error) {

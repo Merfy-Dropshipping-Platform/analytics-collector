@@ -34,7 +34,7 @@ type RevenueTS struct {
 
 type RevenueResponse struct {
 	Summary    RevenueSummary `json:"summary"`
-	TimeSeries []RevenueTS    `json:"time_series"`
+	TimeSeries []RevenueTS   `json:"time_series"`
 }
 
 func HandleRevenue(ctx context.Context, pool *pgxpool.Pool, payload json.RawMessage) (any, error) {
