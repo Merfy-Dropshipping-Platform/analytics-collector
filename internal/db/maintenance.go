@@ -157,6 +157,8 @@ func StartMaintenanceLoop(ctx context.Context, pool *pgxpool.Pool, refreshInterv
 
 		// Ensure partitions on start
 		EnsurePartitions(ctx, pool, keepMonths)
+		// Отчёты CSP витрин хранятся CSPReportDays дней (блок 13 «Секций и SDK», часть 13в).
+		logPrune(PruneCSPReports(ctx, pool, CSPReportDays))
 
 		for {
 			select {
@@ -166,9 +168,25 @@ func StartMaintenanceLoop(ctx context.Context, pool *pgxpool.Pool, refreshInterv
 				RefreshMatviews(ctx, pool)
 			case <-partitionTicker.C:
 				EnsurePartitions(ctx, pool, keepMonths)
+				logPrune(PruneCSPReports(ctx, pool, CSPReportDays))
 			}
 		}
 	}()
 
 	slog.Info("maintenance loop started", "refresh_interval", refreshInterval, "retention_months", keepMonths)
+}
+
+// CSPReportDays — сколько дней хранятся отчёты CSP витрин (bronze.csp_reports, блок 13 «Секций и SDK», часть 13в).
+const CSPReportDays = 30
+
+// PruneCSPReports удаляет отчёты CSP старше days дней.
+func PruneCSPReports(ctx context.Context, pool *pgxpool.Pool, days int) error {
+	_, err := pool.Exec(ctx, `DELETE FROM bronze.csp_reports WHERE minute < now() - make_interval(days => $1::int)`, days)
+	return err
+}
+
+func logPrune(err error) {
+	if err != nil {
+		slog.Error("prune csp reports", "error", err)
+	}
 }
